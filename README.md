@@ -1,8 +1,8 @@
-# DartDeck
+# DartDeck v0.2
 
 A self-hosted darts scoring and practice PWA for Docker / Portainer.
 
-## Included in this first build
+## Included
 
 - X01: 301 / 501 / 701
 - 1–4 players
@@ -10,34 +10,102 @@ A self-hosted darts scoring and practice PWA for Docker / Portainer.
 - Straight-out, double-out or master-out
 - Best-of legs
 - Quick score entry or dart-by-dart entry
-- Checkout suggestions and basic setup-shot advice
+- Checkout suggestions and setup-shot advice
 - Live 3-dart average, first-9 display, high visit, 100+/140+/180 counters
 - Saved players and X01 history in SQLite
 - Lifetime player stats
 - Party games: Cricket, Killer, Shanghai, Halve-It, Around the Clock, Count-Up
 - Solo modes: Checkout Trainer, 121, Bob's 27, Doubles Around the Board, Scoring Trainer, Solo X01
-- PWA/service worker support
+- Custom theme colours and font choice
+- Uploadable app icon / favicon, automatically resized for the browser and PWA
+- Installable PWA manifest with 192px / 512px icons and iOS home-screen icon
+- Optional Screen Wake Lock while a game or practice session is active
+- In-app PWA diagnostics / install status
 
-## Portainer deployment
+## Portainer / Docker deployment
 
-### Option A — Build from files
+The included Compose file uses host port **8788**:
 
-1. Put this folder on your Docker host, for example `/opt/dartdeck`.
-2. In Portainer, create a stack using the included `docker-compose.yml`, or run:
+```yaml
+services:
+  dartdeck:
+    build: .
+    container_name: dartdeck
+    ports:
+      - "8788:8000"
+    volumes:
+      - dartdeck_data:/data
+    environment:
+      - DARTDECK_DB=/data/dartdeck.db
+    restart: unless-stopped
+
+volumes:
+  dartdeck_data:
+```
+
+Build / update with:
 
 ```bash
 docker compose up -d --build
 ```
 
-3. Open:
+Then open:
 
 ```text
 http://YOUR-SERVER-IP:8788
 ```
 
-### Option B — Portainer Git stack
+## GitHub / Portainer Git stack
 
-Put these files into a Git repository, then use Portainer's **Repository** build method and point it at `docker-compose.yml`.
+If the project is stored at `michaelharrison1984/dartdeck`, keep `docker-compose.yml` and `Dockerfile` at the repository root. In Portainer, use the repository stack and set the Compose path to:
+
+```text
+docker-compose.yml
+```
+
+After pushing an updated version, redeploy/re-pull the stack so the image is rebuilt.
+
+## Settings
+
+Open **Settings** in DartDeck to change:
+
+- Primary colour
+- Accent colour
+- Background colour
+- Panel colour
+- Main text colour
+- Muted text colour
+- Font style
+- Keep-screen-awake behaviour
+- App icon / favicon
+
+Theme and branding settings are stored centrally in the same persistent Docker data volume, so they are shared by all devices using DartDeck.
+
+Uploaded icons can be PNG, JPG or WebP up to 5 MB. DartDeck centre-crops the image to a square and automatically creates 64, 180, 192 and 512 pixel PNG versions.
+
+## PWA installation and HTTPS
+
+A normal page can be opened over:
+
+```text
+http://YOUR-SERVER-IP:8788
+```
+
+However, browser security rules normally require a **secure context** for PWA installation and Screen Wake Lock. `localhost` is treated specially, but another device accessing a LAN IP over plain HTTP usually is not.
+
+For reliable PWA installation and the keep-screen-awake feature, expose DartDeck through **HTTPS**, for example through an existing reverse proxy such as Nginx Proxy Manager, Caddy or Traefik.
+
+Once HTTPS is working:
+
+- Chrome / Edge / Android: DartDeck will show its **Install** button when the browser makes the install prompt available.
+- iPhone / iPad: open DartDeck in Safari, tap **Share**, then **Add to Home Screen**.
+- The Settings page reports whether the current connection is secure, whether service workers and Wake Lock are supported, and whether DartDeck is already running as an installed app.
+
+## Screen Wake Lock
+
+With **Keep screen awake** enabled, DartDeck requests a screen wake lock when an X01 match, party game or practice session starts. It releases the lock when you leave the scoring session and attempts to reacquire it when you return to the app after switching tabs/apps.
+
+Wake Lock requires HTTPS (or localhost), a visible page and browser support. Device/browser power-saving policies can still override it in some situations.
 
 ## Data
 
@@ -47,10 +115,21 @@ Persistent data is stored in the named Docker volume:
 dartdeck_data
 ```
 
-The SQLite database is `/data/dartdeck.db` inside the container.
+The SQLite database is:
+
+```text
+/data/dartdeck.db
+```
+
+Uploaded branding icons are stored under:
+
+```text
+/data/branding
+```
+
+Rebuilding or replacing the DartDeck container does not remove this data as long as the named volume is retained.
 
 ## Notes
 
-- Double-in is intentionally forced to dart-by-dart input because the app needs to know which dart opened the leg.
+- Double-in is intentionally forced to dart-by-dart input because DartDeck needs to know which dart opened the leg.
 - A finishing visit in double-out/master-out also needs dart-by-dart input so the final dart can be validated.
-- This is an MVP intended to be iterated after real dartboard use.

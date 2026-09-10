@@ -8,6 +8,84 @@ let x01 = null;
 let party = null;
 let practice = null;
 
+let appSettings = {
+  primary_color:'#8ca75b', accent_color:'#b8cf8f', background_color:'#0d0f10',
+  panel_color:'#171a1c', text_color:'#f4f6f1', muted_color:'#aeb5ad',
+  font:'modern', keep_awake:true, has_custom_favicon:false
+};
+let deferredInstallPrompt = null;
+let wakeLock = null;
+let gameplayActive = false;
+let serviceWorkerReady = false;
+
+const FONT_STACKS = {
+  modern:'Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif',
+  system:'system-ui, -apple-system, "Segoe UI", sans-serif',
+  rounded:'"Trebuchet MS", "Arial Rounded MT Bold", Arial, sans-serif',
+  condensed:'"Arial Narrow", "Roboto Condensed", Arial, sans-serif',
+  classic:'Georgia, "Times New Roman", serif',
+  mono:'"Cascadia Code", "SFMono-Regular", Consolas, "Courier New", monospace'
+};
+
+function applySettings(settings){
+  appSettings={...appSettings,...settings};
+  const r=document.documentElement.style;
+  r.setProperty('--accent',appSettings.primary_color);
+  r.setProperty('--accent-2',appSettings.accent_color);
+  r.setProperty('--bg',appSettings.background_color);
+  r.setProperty('--panel',appSettings.panel_color);
+  r.setProperty('--text',appSettings.text_color);
+  r.setProperty('--muted',appSettings.muted_color);
+  r.setProperty('--font-family',FONT_STACKS[appSettings.font]||FONT_STACKS.modern);
+  const meta=$('meta[name="theme-color"]'); if(meta)meta.setAttribute('content',appSettings.primary_color);
+}
+async function loadSettings(){
+  try{applySettings(await api('/api/settings'));}catch(e){applySettings(appSettings);}
+}
+function refreshBrandIcon(){
+  const stamp=Date.now();
+  $$('.brand-icon').forEach(i=>i.src=`/branding/icon-64.png?v=${stamp}`);
+  const icon=$('link[rel="icon"]'); if(icon)icon.href=`/branding/icon-64.png?v=${stamp}`;
+  const apple=$('link[rel="apple-touch-icon"]'); if(apple)apple.href=`/branding/icon-180.png?v=${stamp}`;
+}
+function isStandalone(){ return window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone===true; }
+function updateInstallButton(){
+  const b=$('#installApp'); if(!b)return;
+  b.classList.toggle('hidden', !deferredInstallPrompt || isStandalone());
+}
+async function installPwa(){
+  if(isStandalone()){toast('DartDeck is already installed');return;}
+  if(!deferredInstallPrompt){
+    const ios=/iphone|ipad|ipod/i.test(navigator.userAgent);
+    toast(ios?'Use Share → Add to Home Screen':'Install option is not available in this browser yet',3200);return;
+  }
+  deferredInstallPrompt.prompt();
+  await deferredInstallPrompt.userChoice.catch(()=>null);
+  deferredInstallPrompt=null; updateInstallButton();
+  if(view.dataset.page==='settings') settingsView();
+}
+window.addEventListener('beforeinstallprompt',e=>{ e.preventDefault(); deferredInstallPrompt=e; updateInstallButton(); if(view.dataset.page==='settings') settingsView(); });
+window.addEventListener('appinstalled',()=>{deferredInstallPrompt=null;updateInstallButton();toast('DartDeck installed');});
+
+async function releaseWakeLock(){
+  if(wakeLock){ try{await wakeLock.release();}catch(e){} wakeLock=null; }
+  $('#wakeBadge')?.classList.add('hidden');
+}
+async function syncWakeLock(){
+  const should=gameplayActive && appSettings.keep_awake && document.visibilityState==='visible';
+  if(!should){await releaseWakeLock();return;}
+  if(!window.isSecureContext || !('wakeLock' in navigator)){ $('#wakeBadge')?.classList.add('hidden'); return; }
+  if(wakeLock)return;
+  try{
+    wakeLock=await navigator.wakeLock.request('screen');
+    $('#wakeBadge')?.classList.remove('hidden');
+    wakeLock.addEventListener('release',()=>{wakeLock=null;$('#wakeBadge')?.classList.add('hidden');});
+  }catch(e){wakeLock=null;$('#wakeBadge')?.classList.add('hidden');}
+}
+function setGameplayActive(active){ gameplayActive=!!active; syncWakeLock(); }
+document.addEventListener('visibilitychange',()=>syncWakeLock());
+
+
 const api = async (url, options={}) => {
   const res = await fetch(url, {headers:{'Content-Type':'application/json'}, ...options});
   if (!res.ok) throw new Error((await res.json().catch(()=>({detail:'Request failed'}))).detail || 'Request failed');
@@ -24,6 +102,7 @@ function fmt(n,d=1){ return Number(n||0).toFixed(d); }
 async function loadPlayers(){ players = await api('/api/players'); }
 
 function home(){
+  setGameplayActive(false);
   view.innerHTML = `
     <div class="grid">
       ${homeCard('🎯','Quick Game','301, 501 or 701 for up to four players.','x01-setup')}
@@ -38,6 +117,7 @@ function home(){
 function homeCard(e,t,d,go){return `<button class="card click" data-go="${go}" style="text-align:left;color:inherit"><div class="emoji">${e}</div><h2>${t}</h2><p class="muted">${d}</p></button>`}
 
 async function playerManager(){
+  setGameplayActive(false);
   await loadPlayers();
   view.innerHTML = `<div class="section-title"><h2>Players</h2><span class="muted">Saved centrally</span></div>
   <div class="card">
@@ -53,13 +133,99 @@ async function playerManager(){
 }
 
 async function statsView(){
+  setGameplayActive(false);
   const rows=await api('/api/stats');
   view.innerHTML=`<div class="section-title"><h2>Player stats</h2><span class="muted">Recorded X01 history</span></div><div class="card table-wrap"><table>
   <thead><tr><th>Player</th><th>Matches</th><th>Legs</th><th>Avg</th><th>Best Avg</th><th>High CO</th><th>High Visit</th><th>180s</th><th>CO%</th></tr></thead>
   <tbody>${rows.map(r=>`<tr><td><strong>${esc(r.name)}</strong></td><td>${r.matches}</td><td>${r.legs_won}</td><td>${fmt(r.lifetime_average,2)}</td><td>${fmt(r.best_average,2)}</td><td>${r.highest_checkout}</td><td>${r.highest_visit}</td><td>${r.total_180s}</td><td>${r.checkout_attempts?fmt(r.checkouts/r.checkout_attempts*100,0)+'%':'—'}</td></tr>`).join('') || '<tr><td colspan="9" class="muted">No stats recorded yet.</td></tr>'}</tbody></table></div>`;
 }
 
+async function settingsView(){
+  setGameplayActive(false);
+  view.dataset.page='settings';
+  await loadSettings();
+  const secure=window.isSecureContext;
+  const sw=('serviceWorker' in navigator);
+  const wake=('wakeLock' in navigator);
+  const standalone=isStandalone();
+  const ios=/iphone|ipad|ipod/i.test(navigator.userAgent);
+  const installText=standalone?'Installed':deferredInstallPrompt?'Install DartDeck':ios?'Use Share → Add to Home Screen':secure?'Install prompt not currently offered':'HTTPS required for installation';
+  view.innerHTML=`
+    <div class="section-title"><h2>Settings</h2><span class="muted">Branding, display & PWA</span></div>
+    <div class="settings-grid">
+      <div class="card">
+        <h3>Theme</h3>
+        <div class="colour-grid">
+          ${colourField('Primary','primaryColor',appSettings.primary_color)}
+          ${colourField('Accent','accentColor',appSettings.accent_color)}
+          ${colourField('Background','backgroundColor',appSettings.background_color)}
+          ${colourField('Panels','panelColor',appSettings.panel_color)}
+          ${colourField('Text','textColor',appSettings.text_color)}
+          ${colourField('Muted text','mutedColor',appSettings.muted_color)}
+        </div>
+        <label style="margin-top:12px">Font
+          <select id="fontChoice">
+            <option value="modern">Modern</option><option value="system">System</option><option value="rounded">Rounded</option>
+            <option value="condensed">Condensed</option><option value="classic">Classic serif</option><option value="mono">Monospace</option>
+          </select>
+        </label>
+        <div class="settings-preview" id="themePreview" style="margin-top:12px"><span class="muted">Preview</span><div class="sample-score">501</div><strong>Checkout: T20 → T19 → D12</strong></div>
+        <div class="actions"><button class="btn primary" id="saveTheme">Save appearance</button><button class="btn" id="defaultTheme">Default colours</button></div>
+      </div>
+      <div class="card">
+        <h3>App icon / favicon</h3>
+        <div style="display:flex;gap:14px;align-items:center;margin-bottom:12px"><img class="favicon-preview" id="faviconPreview" src="/branding/icon-192.png?v=${Date.now()}" alt="Current app icon"><p class="muted">Upload a square PNG, JPG or WebP. DartDeck creates the favicon and PWA icon sizes automatically.</p></div>
+        <label>Choose image<input id="faviconFile" type="file" accept="image/png,image/jpeg,image/webp"></label>
+        <div class="actions" style="justify-content:flex-start"><button class="btn primary" id="uploadFavicon">Upload icon</button><button class="btn" id="resetFavicon" ${appSettings.has_custom_favicon?'':'disabled'}>Restore DartDeck icon</button></div>
+      </div>
+      <div class="card">
+        <h3>During games</h3>
+        <div class="toggle-row"><div><strong>Keep screen awake</strong><div class="muted">Prevents the display sleeping while a match or practice session is active.</div></div><input id="keepAwake" type="checkbox" ${appSettings.keep_awake?'checked':''}></div>
+        <p class="muted">Wake Lock requires HTTPS (or localhost) and a supported browser.</p>
+        <div class="actions" style="justify-content:flex-start"><button class="btn primary" id="saveGameSettings">Save game settings</button></div>
+      </div>
+      <div class="card">
+        <h3>PWA status</h3>
+        ${statusRow(secure,secure?'Secure context: yes':'Secure context: no — use HTTPS')}
+        ${statusRow(sw,sw?'Service worker supported':'Service worker not supported')}
+        ${statusRow(wake,wake?'Screen Wake Lock supported':'Screen Wake Lock unavailable')}
+        ${statusRow(standalone,standalone?'Running as installed app':'Running in browser')}
+        <div class="actions" style="justify-content:flex-start"><button class="btn primary" id="installFromSettings" ${(!deferredInstallPrompt||standalone)?'disabled':''}>${esc(installText)}</button></div>
+        ${!secure?'<p class="warn"><strong>Important:</strong> Browsing to a LAN IP over plain HTTP normally prevents PWA installation and screen wake lock. Put DartDeck behind HTTPS to enable both.</p>':''}
+        ${ios&&!standalone?'<p class="muted">On iPhone/iPad, open Safari, tap Share, then <strong>Add to Home Screen</strong>.</p>':''}
+      </div>
+    </div>`;
+  $('#fontChoice').value=appSettings.font;
+  $$('[data-sync]').forEach(t=>{t.onchange=()=>{if(/^#[0-9a-fA-F]{6}$/.test(t.value)){const c=$('#'+t.dataset.sync);c.value=t.value;preview();}else t.value=$('#'+t.dataset.sync).value;};});
+  const preview=()=>applySettings({...appSettings,primary_color:$('#primaryColor').value,accent_color:$('#accentColor').value,background_color:$('#backgroundColor').value,panel_color:$('#panelColor').value,text_color:$('#textColor').value,muted_color:$('#mutedColor').value,font:$('#fontChoice').value});
+  ['primaryColor','accentColor','backgroundColor','panelColor','textColor','mutedColor','fontChoice'].forEach(id=>$('#'+id).oninput=preview);
+  $('#defaultTheme').onclick=()=>{const d={primary_color:'#8ca75b',accent_color:'#b8cf8f',background_color:'#0d0f10',panel_color:'#171a1c',text_color:'#f4f6f1',muted_color:'#aeb5ad',font:'modern'};$('#primaryColor').value=d.primary_color;$('#accentColor').value=d.accent_color;$('#backgroundColor').value=d.background_color;$('#panelColor').value=d.panel_color;$('#textColor').value=d.text_color;$('#mutedColor').value=d.muted_color;$('#fontChoice').value=d.font;preview();};
+  $('#saveTheme').onclick=async()=>{await saveSettingsFromForm();toast('Appearance saved');};
+  $('#saveGameSettings').onclick=async()=>{await saveSettingsFromForm();toast('Game settings saved');};
+  $('#uploadFavicon').onclick=uploadFavicon;
+  $('#resetFavicon').onclick=resetFavicon;
+  $('#installFromSettings').onclick=installPwa;
+}
+function colourField(label,id,value){return `<label>${label}<span class="colour-field"><input type="color" id="${id}" value="${value}"><input value="${value}" aria-label="${label} hex colour" data-sync="${id}" maxlength="7"></span></label>`}
+function statusRow(ok,text){return `<div class="status-row"><span class="status-dot ${ok?'ok':'bad'}"></span><span>${text}</span></div>`}
+async function saveSettingsFromForm(){
+  const payload={primary_color:$('#primaryColor').value,accent_color:$('#accentColor').value,background_color:$('#backgroundColor').value,panel_color:$('#panelColor').value,text_color:$('#textColor').value,muted_color:$('#mutedColor').value,font:$('#fontChoice').value,keep_awake:$('#keepAwake').checked};
+  appSettings=await api('/api/settings',{method:'PUT',body:JSON.stringify(payload)});applySettings(appSettings);syncWakeLock();
+}
+async function uploadFavicon(){
+  const file=$('#faviconFile').files[0]; if(!file){toast('Choose an image first');return;}
+  const fd=new FormData();fd.append('file',file);
+  const res=await fetch('/api/settings/favicon',{method:'POST',body:fd});
+  if(!res.ok){const e=await res.json().catch(()=>({detail:'Upload failed'}));toast(e.detail||'Upload failed',3000);return;}
+  appSettings={...appSettings,...await res.json()};refreshBrandIcon();toast('App icon updated');settingsView();
+}
+async function resetFavicon(){
+  const res=await fetch('/api/settings/favicon',{method:'DELETE'});if(!res.ok){toast('Could not reset icon');return;}
+  appSettings={...appSettings,...await res.json()};refreshBrandIcon();toast('Default icon restored');settingsView();
+}
+
 async function x01Setup(){
+  setGameplayActive(false);
   await loadPlayers();
   if(players.length===0){ view.innerHTML=`<div class="card"><h2>Add a player first</h2><p class="muted">Create at least one saved player before starting a match.</p><button class="btn primary" id="goPlayers">Players</button></div>`; $('#goPlayers').onclick=playerManager; return; }
   const opts=players.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('');
@@ -86,6 +252,7 @@ async function x01Setup(){
 
 function basePlayer(p,start){return {id:p.id,name:p.name,score:start,legs:0,in:false,totalScored:0,darts:0,first9Points:0,first9Darts:0,highestVisit:0,highestCheckout:0,attempts:0,checkouts:0,c100:0,c140:0,c180:0,visits:[],legStartScored:0,legStartDarts:0};}
 function startX01(cfg){
+  setGameplayActive(true);
   const selected=cfg.ids.map(id=>players.find(p=>p.id===id));
   x01={...cfg, players:selected.map(p=>basePlayer(p,cfg.start)), turn:0, visit:[], mult:1, quick:'', history:[], finished:false, legNo:1};
   renderX01();
@@ -190,6 +357,7 @@ function commitVisit(v){
 }
 function startNextLeg(){const g=x01;g.legNo++;g.turn=(g.legNo-1)%g.players.length;g.players.forEach(p=>{p.score=g.start;p.in=false;p.first9Points=0;p.first9Darts=0;});g.quick='';g.visit=[];renderX01();}
 async function finishMatch(winner){
+  setGameplayActive(false);
   const g=x01; g.finished=true;
   const payload={game_type:'x01',start_score:g.start,winner_player_id:winner.id,settings_json:JSON.stringify({doubleIn:g.doubleIn,out:g.out,bestOf:g.bestOf}),players:g.players.map((p,i)=>({player_id:p.id,finishing_position:p.id===winner.id?1:2,darts_thrown:p.darts,points_scored:p.totalScored,three_dart_average:p.darts?p.totalScored*3/p.darts:0,first_nine_average:0,highest_visit:p.highestVisit,highest_checkout:p.highestCheckout,checkout_attempts:p.attempts,checkouts:p.checkouts,scores_100_plus:p.c100,scores_140_plus:p.c140,scores_180:p.c180,legs_won:p.legs}))};
   try{await api('/api/matches',{method:'POST',body:JSON.stringify(payload)});}catch(e){toast('Could not save match: '+e.message,3000)}
@@ -253,11 +421,13 @@ function setupSuggestion(score,out){
 }
 
 function partyMenu(){
+  setGameplayActive(false);
   const games=[['🏏','Cricket','Close 15–20 + Bull, with scoring.','cricket'],['👑','Killer','Earn killer status, then take opponents’ lives.','killer'],['🌏','Shanghai','Seven rounds; S+D+T wins instantly.','shanghai'],['✂️','Halve-It','Miss the target and your score is halved.','halveit'],['⏰','Around the Clock','Race from 1 through 20.','around'],['💯','Count-Up','Highest total after the chosen rounds wins.','countup']];
   view.innerHTML=`<div class="section-title"><h2>Party games</h2></div><div class="grid">${games.map(g=>`<button class="card click" data-party="${g[3]}" style="text-align:left;color:inherit"><div class="emoji">${g[0]}</div><h2>${g[1]}</h2><p class="muted">${g[2]}</p></button>`).join('')}</div>`;
   $$('[data-party]').forEach(b=>b.onclick=()=>partySetup(b.dataset.party));
 }
 async function partySetup(type){
+  setGameplayActive(false);
   await loadPlayers(); if(players.length<1){route('players');return;}
   const opts=players.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('');
   view.innerHTML=`<div class="section-title"><h2>${partyName(type)}</h2></div><div class="card"><div class="form-grid"><label>Players<select id="pc"><option>1</option><option selected>2</option><option>3</option><option>4</option></select></label><label>Rounds / lives<input id="rounds" type="number" min="1" max="20" value="${type==='killer'?3:type==='countup'?8:type==='shanghai'?7:7}"></label></div><div id="ps" class="form-grid" style="margin-top:12px"></div><div class="actions"><button class="btn primary big" id="startParty">Start</button></div></div>`;
@@ -266,6 +436,7 @@ async function partySetup(type){
 }
 function partyName(t){return ({cricket:'Cricket',killer:'Killer',shanghai:'Shanghai',halveit:'Halve-It',around:'Around the Clock',countup:'Count-Up'})[t]}
 function startParty(type,ids,rounds){
+  setGameplayActive(true);
   const ps=ids.map(id=>players.find(p=>p.id===id));
   party={type,rounds,turn:0,round:1,players:ps.map((p,i)=>({id:p.id,name:p.name,score:0,target:1,lives:rounds,killer:false,number:i+1,marks:{15:0,16:0,17:0,18:0,19:0,20:0,25:0}})),darts:0,finished:false};
   if(type==='killer'){party.players.forEach((p,i)=>p.number=[1,3,5,7,9,11,13,15,17,19][i]);}
@@ -298,7 +469,7 @@ function bindParty(){
   $$('[data-attack]').forEach(b=>b.onclick=()=>{const opp=g.players.find(x=>x.id===+$('#opp').value);opp.lives=Math.max(0,opp.lives-+b.dataset.attack);const alive=g.players.filter(x=>x.lives>0);if(alive.length===1){partyWinner(alive[0]);return;}nextPartyTurn(false);});
 }
 function nextPartyTurn(roundBased=true){const g=party;g.turn++;if(g.turn>=g.players.length){g.turn=0;if(roundBased)g.round++;}if(roundBased&&g.round>g.rounds){const max=Math.max(...g.players.map(p=>p.score));partyWinner(g.players.find(p=>p.score===max));return;}renderParty();}
-function partyWinner(p,extra=''){view.innerHTML=`<div class="card"><div class="target-big">🏆</div><h2 style="text-align:center">${esc(p.name)} wins!</h2><p class="muted" style="text-align:center">${extra}</p><div class="actions"><button class="btn primary" id="againP">Play again</button><button class="btn" id="homeP">Home</button></div></div>`;$('#againP').onclick=()=>partySetup(party.type);$('#homeP').onclick=home;}
+function partyWinner(p,extra=''){setGameplayActive(false);view.innerHTML=`<div class="card"><div class="target-big">🏆</div><h2 style="text-align:center">${esc(p.name)} wins!</h2><p class="muted" style="text-align:center">${extra}</p><div class="actions"><button class="btn primary" id="againP">Play again</button><button class="btn" id="homeP">Home</button></div></div>`;$('#againP').onclick=()=>partySetup(party.type);$('#homeP').onclick=home;}
 
 function renderCricket(){
   const g=party,p=g.players[g.turn], segs=[20,19,18,17,16,15,25];
@@ -318,17 +489,20 @@ function cricketDart(seg,m){
 }
 
 function practiceMenu(){
+  setGameplayActive(false);
   const modes=[['🎯','Checkout Trainer','Random finishes with route advice.','checkout'],['🔢','121','Climb through checkouts from 121.','121'],['🎯','Bob’s 27','Work through every double.','bobs27'],['⭕','Doubles Around Board','Track hits from D1 to Bull.','doubles'],['🔥','Scoring Trainer','Fixed visits for maximum scoring.','scoring'],['👤','Solo X01','Play 301/501/701 against yourself.','solox01']];
   view.innerHTML=`<div class="section-title"><h2>Solo practice</h2></div><div class="grid">${modes.map(m=>`<button class="card click" data-practice="${m[3]}" style="text-align:left;color:inherit"><div class="emoji">${m[0]}</div><h2>${m[1]}</h2><p class="muted">${m[2]}</p></button>`).join('')}</div>`;
   $$('[data-practice]').forEach(b=>b.onclick=()=>practiceSetup(b.dataset.practice));
 }
 async function practiceSetup(mode){
+  setGameplayActive(false);
   await loadPlayers(); if(!players.length){route('players');return;}
   view.innerHTML=`<div class="section-title"><h2>${practiceName(mode)}</h2></div><div class="card"><div class="form-grid"><label>Player<select id="pracPlayer">${players.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select></label>${mode==='solox01'?'<label>Starting score<select id="pracStart"><option>301</option><option selected>501</option><option>701</option></select></label>':''}</div><div class="actions"><button class="btn primary big" id="startPractice">Start</button></div></div>`;
   $('#startPractice').onclick=()=>{if(mode==='solox01'){const id=+$('#pracPlayer').value;startX01({start:+$('#pracStart').value,ids:[id],doubleIn:false,out:'double',bestOf:1,mode:'darts'});return;} startPractice(mode,+$('#pracPlayer').value);};
 }
 function practiceName(m){return ({checkout:'Checkout Trainer','121':'121',bobs27:"Bob's 27",doubles:'Doubles Around Board',scoring:'Scoring Trainer',solox01:'Solo X01'})[m]}
 function startPractice(mode,playerId){
+  setGameplayActive(true);
   const p=players.find(x=>x.id===playerId);
   practice={mode,player:p,round:1,score:mode==='bobs27'?27:0,target:mode==='121'?121:mode==='checkout'?randomCheckout():mode==='doubles'?1:20,hits:0,attempts:0,visits:0,total:0};renderPractice();
 }
@@ -348,6 +522,7 @@ function renderPractice(){
   }
 }
 async function finishPractice(){
+  setGameplayActive(false);
   const g=practice; let score=0,detail={};
   if(g.mode==='bobs27'){score=g.score;detail={hits:g.hits,darts:g.attempts};}
   if(g.mode==='doubles'){score=g.attempts?g.hits/g.attempts*100:0;detail={hits:g.hits,darts:g.attempts};}
@@ -358,9 +533,17 @@ async function finishPractice(){
 }
 
 function route(name){
+  view.dataset.page=name;
   window.scrollTo({top:0,behavior:'smooth'});
-  if(name==='home')home(); else if(name==='players')playerManager(); else if(name==='stats')statsView(); else if(name==='x01-setup')x01Setup(); else if(name==='party-menu')partyMenu(); else if(name==='practice-menu')practiceMenu();
+  if(name==='home')home(); else if(name==='players')playerManager(); else if(name==='stats')statsView(); else if(name==='settings')settingsView(); else if(name==='x01-setup')x01Setup(); else if(name==='party-menu')partyMenu(); else if(name==='practice-menu')practiceMenu();
 }
 $$('[data-nav]').forEach(b=>b.onclick=()=>route(b.dataset.nav));
-if('serviceWorker' in navigator) navigator.serviceWorker.register('/service-worker.js').catch(()=>{});
-loadPlayers().finally(home);
+$('#installApp').onclick=installPwa;
+if('serviceWorker' in navigator){
+  navigator.serviceWorker.register('/service-worker.js').then(()=>navigator.serviceWorker.ready).then(()=>{serviceWorkerReady=true;if(view.dataset.page==='settings')settingsView();}).catch(()=>{});
+}
+Promise.all([loadSettings(),loadPlayers()]).finally(()=>{
+  updateInstallButton();
+  const go=new URLSearchParams(location.search).get('go');
+  route(go||'home');
+});

@@ -2,21 +2,39 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import json
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, HTTPException, UploadFile, File
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+from PIL import Image, ImageOps
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
 DB_PATH = Path(os.getenv("DARTDECK_DB", "/data/dartdeck.db"))
 DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+BRANDING_DIR = DB_PATH.parent / "branding"
+BRANDING_DIR.mkdir(parents=True, exist_ok=True)
 
-app = FastAPI(title="DartDeck", version="0.1.0")
+DEFAULT_SETTINGS = {
+    "primary_color": "#8ca75b",
+    "accent_color": "#b8cf8f",
+    "background_color": "#0d0f10",
+    "panel_color": "#171a1c",
+    "text_color": "#f4f6f1",
+    "muted_color": "#aeb5ad",
+    "font": "modern",
+    "keep_awake": True,
+}
+ALLOWED_FONTS = {"modern", "system", "rounded", "condensed", "classic", "mono"}
+HEX_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
+
+app = FastAPI(title="DartDeck", version="0.2.0")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
@@ -76,6 +94,11 @@ def init_db() -> None:
                 played_at TEXT NOT NULL,
                 FOREIGN KEY (player_id) REFERENCES players(id)
             );
+
+            CREATE TABLE IF NOT EXISTS app_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
             """
         )
 
@@ -119,6 +142,94 @@ class PracticeIn(BaseModel):
     mode: str
     score: float = 0
     details_json: str | None = None
+
+
+class SettingsIn(BaseModel):
+    primary_color: str
+    accent_color: str
+    background_color: str
+    panel_color: str
+    text_color: str
+    muted_color: str
+    font: str
+    keep_awake: bool = True
+
+
+def load_settings() -> dict[str, Any]:
+    result = dict(DEFAULT_SETTINGS)
+    with db() as conn:
+        rows = conn.execute("SELECT key, value FROM app_settings").fetchall()
+    for row in rows:
+        key = row["key"]
+        if key not in result:
+            continue
+        if key == "keep_awake":
+            result[key] = row["value"].lower() == "true"
+        else:
+            result[key] = row["value"]
+    result["has_custom_favicon"] = (BRANDING_DIR / "icon-512.png").exists()
+    return result
+
+
+def icon_path(size: int) -> Path:
+    custom = BRANDING_DIR / f"icon-{size}.png"
+    if custom.exists():
+        return custom
+    return STATIC_DIR / "icons" / f"icon-{size}.png"
+
+
+@app.get("/api/settings")
+def get_settings() -> dict[str, Any]:
+    return load_settings()
+
+
+@app.put("/api/settings")
+def update_settings(payload: SettingsIn) -> dict[str, Any]:
+    data = payload.model_dump()
+    for key in ("primary_color", "accent_color", "background_color", "panel_color", "text_color", "muted_color"):
+        if not HEX_RE.match(str(data[key])):
+            raise HTTPException(400, f"Invalid colour for {key}")
+    if data["font"] not in ALLOWED_FONTS:
+        raise HTTPException(400, "Invalid font")
+    with db() as conn:
+        for key, value in data.items():
+            stored = "true" if value is True else "false" if value is False else str(value)
+            conn.execute(
+                "INSERT INTO app_settings(key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (key, stored),
+            )
+    return load_settings()
+
+
+@app.post("/api/settings/favicon")
+async def upload_favicon(file: UploadFile = File(...)) -> dict[str, Any]:
+    if file.content_type not in {"image/png", "image/jpeg", "image/webp"}:
+        raise HTTPException(400, "Upload a PNG, JPG or WebP image")
+    raw = await file.read()
+    if len(raw) > 5 * 1024 * 1024:
+        raise HTTPException(400, "Image must be 5 MB or smaller")
+    try:
+        from io import BytesIO
+        source = Image.open(BytesIO(raw)).convert("RGBA")
+    except Exception as exc:
+        raise HTTPException(400, "Could not read that image") from exc
+    if min(source.size) < 64:
+        raise HTTPException(400, "Image must be at least 64 × 64 pixels")
+    # Centre-crop square, then generate all PWA/favicon sizes.
+    source = ImageOps.fit(source, (1024, 1024), method=Image.Resampling.LANCZOS)
+    for size in (64, 180, 192, 512):
+        out = source.resize((size, size), Image.Resampling.LANCZOS)
+        out.save(BRANDING_DIR / f"icon-{size}.png", "PNG", optimize=True)
+    return load_settings()
+
+
+@app.delete("/api/settings/favicon")
+def reset_favicon() -> dict[str, Any]:
+    for size in (64, 180, 192, 512):
+        path = BRANDING_DIR / f"icon-{size}.png"
+        if path.exists():
+            path.unlink()
+    return load_settings()
 
 
 @app.get("/api/health")
@@ -235,10 +346,48 @@ def index() -> FileResponse:
 
 
 @app.get("/manifest.webmanifest")
-def manifest() -> FileResponse:
-    return FileResponse(STATIC_DIR / "manifest.webmanifest", media_type="application/manifest+json")
+def manifest() -> JSONResponse:
+    settings = load_settings()
+    payload = {
+        "id": "/",
+        "name": "DartDeck",
+        "short_name": "DartDeck",
+        "start_url": "/",
+        "scope": "/",
+        "display": "standalone",
+        "display_override": ["window-controls-overlay", "standalone", "minimal-ui"],
+        "background_color": settings["background_color"],
+        "theme_color": settings["primary_color"],
+        "description": "Self-hosted darts scoring and practice app",
+        "orientation": "any",
+        "icons": [
+            {"src": "/branding/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable"},
+            {"src": "/branding/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable"},
+        ],
+        "shortcuts": [
+            {"name": "New X01 game", "short_name": "X01", "url": "/?go=x01-setup", "icons": [{"src": "/branding/icon-192.png", "sizes": "192x192"}]},
+            {"name": "Solo practice", "short_name": "Practice", "url": "/?go=practice-menu", "icons": [{"src": "/branding/icon-192.png", "sizes": "192x192"}]},
+        ],
+    }
+    return JSONResponse(payload, headers={"Cache-Control": "no-cache"})
+
+
+@app.get("/branding/icon-{size}.png")
+def branding_icon(size: int) -> FileResponse:
+    if size not in {64, 180, 192, 512}:
+        raise HTTPException(404, "Icon not found")
+    return FileResponse(icon_path(size), media_type="image/png", headers={"Cache-Control": "no-cache"})
+
+
+@app.get("/favicon.ico")
+def favicon() -> FileResponse:
+    return FileResponse(icon_path(64), media_type="image/png", headers={"Cache-Control": "no-cache"})
 
 
 @app.get("/service-worker.js")
 def service_worker() -> FileResponse:
-    return FileResponse(STATIC_DIR / "service-worker.js", media_type="application/javascript")
+    return FileResponse(
+        STATIC_DIR / "service-worker.js",
+        media_type="application/javascript",
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate", "Service-Worker-Allowed": "/"},
+    )

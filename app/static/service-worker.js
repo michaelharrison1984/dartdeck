@@ -1,12 +1,36 @@
-const CACHE = 'dartdeck-v1';
-const ASSETS = ['/', '/static/app.js', '/static/styles.css', '/manifest.webmanifest'];
-self.addEventListener('install', e => e.waitUntil(caches.open(CACHE).then(c => c.addAll(ASSETS))));
-self.addEventListener('activate', e => e.waitUntil(self.clients.claim()));
-self.addEventListener('fetch', e => {
-  if (e.request.method !== 'GET') return;
-  e.respondWith(fetch(e.request).then(r => {
-    const clone = r.clone();
-    caches.open(CACHE).then(c => c.put(e.request, clone));
-    return r;
-  }).catch(() => caches.match(e.request)));
+const CACHE = 'dartdeck-v2';
+const CORE = ['/', '/static/app.js', '/static/styles.css', '/branding/icon-192.png', '/branding/icon-512.png'];
+
+self.addEventListener('install', event => {
+  self.skipWaiting();
+  event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(CORE)));
+});
+
+self.addEventListener('activate', event => {
+  event.waitUntil(Promise.all([
+    caches.keys().then(keys => Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k)))),
+    self.clients.claim()
+  ]));
+});
+
+self.addEventListener('fetch', event => {
+  const req = event.request;
+  if (req.method !== 'GET') return;
+  const url = new URL(req.url);
+  if (url.origin !== self.location.origin || url.pathname.startsWith('/api/')) return;
+
+  if (req.mode === 'navigate') {
+    event.respondWith(fetch(req).catch(() => caches.match('/')));
+    return;
+  }
+
+  event.respondWith(
+    fetch(req).then(res => {
+      if (res.ok && !url.pathname.startsWith('/branding/')) {
+        const copy = res.clone();
+        caches.open(CACHE).then(cache => cache.put(req, copy));
+      }
+      return res;
+    }).catch(() => caches.match(req))
+  );
 });

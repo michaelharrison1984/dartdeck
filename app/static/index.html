@@ -4,22 +4,31 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="theme-color" content="#8ca75b" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="DartDeck" />
   <title>DartDeck</title>
   <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="icon" type="image/png" sizes="64x64" href="/branding/icon-64.png" />
+  <link rel="apple-touch-icon" sizes="180x180" href="/branding/icon-180.png" />
   <link rel="stylesheet" href="/static/styles.css" />
 </head>
 <body>
   <div class="app">
     <header class="topbar">
-      <div class="brand"><div class="logo">D</div><div><h1>DartDeck</h1><small>Self-hosted darts scoring</small></div></div>
+      <div class="brand"><img class="brand-icon" src="/branding/icon-64.png" alt=""><div><h1>DartDeck</h1><small>Self-hosted darts scoring</small></div></div>
       <nav class="nav">
         <button data-nav="home">Home</button>
         <button data-nav="players">Players</button>
         <button data-nav="stats">Stats</button>
+        <button data-nav="settings">Settings</button>
+        <button id="installApp" class="install-nav hidden">Install</button>
       </nav>
     </header>
     <main id="view"></main>
   </div>
+  <div id="wakeBadge" class="wake-badge hidden">☀ Screen awake</div>
   <div id="toast" class="toast hidden"></div>
   <script src="/static/app.js"></script>
 </body>
