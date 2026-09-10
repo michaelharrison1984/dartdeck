@@ -32,7 +32,7 @@ docker compose up -d --build
 3. Open:
 
 ```text
-http://YOUR-SERVER-IP:8787
+http://YOUR-SERVER-IP:8788
 ```
 
 ### Option B — Portainer Git stack
