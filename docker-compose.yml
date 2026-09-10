@@ -3,7 +3,7 @@ services:
     build: .
     container_name: dartdeck
     ports:
-      - "8787:8000"
+      - "8788:8000"
     volumes:
       - dartdeck_data:/data
     environment:
