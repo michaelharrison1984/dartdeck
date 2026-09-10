@@ -1,9 +1,0 @@
-{
-  "name": "DartDeck",
-  "short_name": "DartDeck",
-  "start_url": "/",
-  "display": "standalone",
-  "background_color": "#111315",
-  "theme_color": "#8ca75b",
-  "description": "Self-hosted darts scoring and practice app"
-}
