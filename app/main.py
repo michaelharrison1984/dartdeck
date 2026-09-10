@@ -34,7 +34,7 @@ DEFAULT_SETTINGS = {
 ALLOWED_FONTS = {"modern", "system", "rounded", "condensed", "classic", "mono"}
 HEX_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 
-app = FastAPI(title="DartDeck", version="0.2.1")
+app = FastAPI(title="DartDeck", version="0.3.0")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
@@ -369,7 +369,7 @@ def manifest() -> JSONResponse:
         ],
         "shortcuts": [
             {"name": "New X01 game", "short_name": "X01", "url": "/?go=x01-setup", "icons": [{"src": "/branding/icon-192.png", "sizes": "192x192"}]},
-            {"name": "Solo practice", "short_name": "Practice", "url": "/?go=practice-menu", "icons": [{"src": "/branding/icon-192.png", "sizes": "192x192"}]},
+            {"name": "Training", "short_name": "Training", "url": "/?go=practice-menu", "icons": [{"src": "/branding/icon-192.png", "sizes": "192x192"}]},
         ],
     }
     return JSONResponse(payload, headers={"Cache-Control": "no-cache"})

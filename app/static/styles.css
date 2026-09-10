@@ -102,3 +102,10 @@ th { color: var(--muted); font-size: .82rem; text-transform: uppercase; letter-s
 .toggle-row input { width:22px; height:22px; accent-color:var(--accent); }
 .install-nav { border-color:var(--accent)!important; }
 @media (max-width:700px){ .colour-grid{grid-template-columns:1fr;} .wake-badge{right:8px;bottom:8px;} }
+
+.checkout-confirm { margin: 0 0 16px; padding: 16px; display:flex; gap:12px; align-items:flex-start; background:color-mix(in srgb, var(--accent) 20%, var(--panel)); border:2px solid var(--accent); border-radius:14px; box-shadow:0 0 0 2px color-mix(in srgb, var(--accent) 14%, transparent); }
+.checkout-confirm-icon { font-size:1.8rem; line-height:1; }
+.checkout-confirm strong { color:var(--accent-2); font-size:1.08rem; }
+.checkout-confirm p { margin:6px 0 0; color:var(--text); line-height:1.45; }
+.practice-progress { display:flex; justify-content:center; gap:18px; flex-wrap:wrap; margin:0 auto 12px; padding:10px 14px; border:1px solid var(--line); border-radius:999px; width:fit-content; background:var(--panel-2); }
+.practice-progress span { color:var(--muted); }

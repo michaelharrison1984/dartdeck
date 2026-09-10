@@ -1,4 +1,4 @@
-# DartDeck v0.2.1 v0.2
+# DartDeck v0.3.0
 
 A self-hosted darts scoring and practice PWA for Docker / Portainer.
 
@@ -15,7 +15,7 @@ A self-hosted darts scoring and practice PWA for Docker / Portainer.
 - Saved players and X01 history in SQLite
 - Lifetime player stats
 - Party games: Cricket, Killer, Shanghai, Halve-It, Around the Clock, Count-Up
-- Solo modes: Checkout Trainer, 121, Bob's 27, Doubles Around the Board, Scoring Trainer, Solo X01
+- Training modes: Checkout Trainer, 121 (9 darts / 3 visits per target), Bob's 27, Doubles Around the Board, Scoring Trainer
 - Custom theme colours and font choice
 - Uploadable app icon / favicon, automatically resized for the browser and PWA
 - Installable PWA manifest with 192px / 512px icons and iOS home-screen icon
@@ -132,8 +132,8 @@ Rebuilding or replacing the DartDeck container does not remove this data as long
 ## Notes
 
 - Double-in is intentionally forced to dart-by-dart input because DartDeck needs to know which dart opened the leg.
-- A finishing visit in double-out/master-out also needs dart-by-dart input so the final dart can be validated.
+- A finishing visit in double-out/master-out also needs dart-by-dart input so the final dart can be validated. When a quick-score entry would finish the leg, DartDeck now keeps a persistent confirmation panel on screen while you enter the finishing darts.
 
 
-## Updating from v0.2
-This build adds cache-busting for the main JavaScript/CSS and forces the app shell to refresh after updates. Redeploy/rebuild the container, then reload DartDeck once. Existing data in the `dartdeck_data` volume is preserved.
+## Updating from v0.2.1
+This build renames Solo Practice to **Training**, removes the duplicate Solo X01 tile, changes **121** to allow 9 darts (3 visits) per target, and makes quick-score checkout confirmation persistent and explicit. Redeploy/rebuild the container, then reload DartDeck once. Existing data in the `dartdeck_data` volume is preserved.

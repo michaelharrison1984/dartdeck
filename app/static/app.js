@@ -17,7 +17,7 @@ let deferredInstallPrompt = null;
 let wakeLock = null;
 let gameplayActive = false;
 let serviceWorkerReady = false;
-const APP_VERSION = '0.2.1';
+const APP_VERSION = '0.3.0';
 
 const FONT_STACKS = {
   modern:'Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif',
@@ -108,7 +108,7 @@ function home(){
     <div class="grid">
       ${homeCard('🎯','Quick Game','301, 501 or 701 for up to four players.','x01-setup')}
       ${homeCard('👥','Party Games','Cricket, Killer, Shanghai and more.','party-menu')}
-      ${homeCard('🏋️','Solo Practice','Checkouts, doubles and scoring drills.','practice-menu')}
+      ${homeCard('🏋️','Training','Checkouts, doubles and scoring drills.','practice-menu')}
       ${homeCard('📊','Stats','Lifetime averages, 180s and checkout data.','stats')}
     </div>
     <div class="section-title"><h2>Designed for the oche</h2></div>
@@ -256,22 +256,31 @@ function basePlayer(p,start){return {id:p.id,name:p.name,score:start,legs:0,in:f
 function startX01(cfg){
   setGameplayActive(true);
   const selected=cfg.ids.map(id=>players.find(p=>p.id===id));
-  x01={...cfg, players:selected.map(p=>basePlayer(p,cfg.start)), turn:0, visit:[], mult:1, quick:'', history:[], finished:false, legNo:1};
+  x01={...cfg, players:selected.map(p=>basePlayer(p,cfg.start)), turn:0, visit:[], mult:1, quick:'', history:[], finished:false, legNo:1, checkoutPending:null};
   renderX01();
 }
 
 function renderX01(){
   const g=x01, active=g.players[g.turn];
   const route=getCheckout(active.score,g.out);
+  const checkoutConfirm=g.checkoutPending ? `
+    <div class="checkout-confirm" role="status">
+      <div class="checkout-confirm-icon">🎯</div>
+      <div>
+        <strong>Confirm the checkout dart-by-dart</strong>
+        <p>You entered <b>${g.checkoutPending.score}</b> to finish <b>${g.checkoutPending.from}</b>. Enter the actual finishing darts below, then tap <b>Confirm checkout</b>. This message will stay here until you finish or return to quick scoring.</p>
+      </div>
+    </div>` : '';
   view.innerHTML=`
   <div class="section-title"><h2>${g.start} · Leg ${g.legNo}</h2><span class="muted">First to ${Math.floor(g.bestOf/2)+1} legs</span></div>
   <div class="scoreboard">${g.players.map((p,i)=>playerScoreCard(p,i===g.turn,g)).join('')}</div>
   <div class="checkout">${route ? `<strong>Checkout:</strong> ${route.join(' → ')}` : `<strong>${active.score}</strong> remaining · ${setupSuggestion(active.score,g.out)}`}</div>
   <div class="card">
+    ${checkoutConfirm}
     <div class="game-status">${esc(active.name)} to throw ${g.doubleIn&&!active.in?'· needs a double to get in':''}</div>
     ${g.mode==='quick'?quickInput():dartInput()}
     <div class="actions">
-      <button class="btn" id="switchInput">${g.mode==='quick'?'Dart-by-dart':'Quick score'}</button>
+      <button class="btn" id="switchInput">${g.checkoutPending?'Back to quick score':g.mode==='quick'?'Dart-by-dart':'Quick score'}</button>
       <button class="btn" id="undo">Undo last visit</button>
       <button class="btn danger" id="endGame">End game</button>
     </div>
@@ -290,23 +299,33 @@ function dartInput(){
   return `<div class="visit-darts">${x01.visit.length?x01.visit.map(d=>`<span class="dart-chip">${d.label}</span>`).join(''):`<span class="muted">${labels}</span>`}</div>
   <div class="multis"><button data-m="1" class="${x01.mult===1?'active':''}">Single</button><button data-m="2" class="${x01.mult===2?'active':''}">Double</button><button data-m="3" class="${x01.mult===3?'active':''}">Treble</button><button data-m="0">Miss</button></div>
   <div class="dartboard">${Array.from({length:20},(_,i)=>i+1).map(n=>`<button data-seg="${n}">${n}</button>`).join('')}<button data-seg="25">Bull</button></div>
-  <div class="actions"><button class="btn" id="clearDarts">Clear darts</button><button class="btn primary big" id="submitDarts">Submit visit</button></div>`;
+  <div class="actions"><button class="btn" id="clearDarts">Clear darts</button><button class="btn primary big" id="submitDarts">${x01.checkoutPending?'Confirm checkout':'Submit visit'}</button></div>`;
 }
 function bindX01(){
   $('#switchInput').onclick=()=>{
     const p=x01.players[x01.turn];
+    if(x01.checkoutPending){x01.checkoutPending=null;x01.mode='quick';x01.quick='';x01.visit=[];renderX01();return;}
     if(x01.doubleIn && !p.in && x01.mode==='darts'){toast('Stay in dart-by-dart mode until this player is in');return;}
     x01.mode=x01.mode==='quick'?'darts':'quick'; x01.quick=''; x01.visit=[]; renderX01();
   };
   $('#undo').onclick=undoX01; $('#endGame').onclick=()=>{if(confirm('End this game without saving?')) route('home')};
   if(x01.mode==='quick'){
     $$('[data-key]').forEach(b=>b.onclick=()=>{const k=b.dataset.key;if(k==='C')x01.quick='';else if(k==='⌫')x01.quick=x01.quick.slice(0,-1);else if(x01.quick.length<3)x01.quick+=k; $('#quickTotal').textContent=x01.quick||'—';});
-    $('#submitQuick').onclick=()=>{const n=+x01.quick;if(x01.quick===''||n<0||n>180){toast('Enter a score from 0 to 180');return;} commitVisit({score:n,darts:3,finishDarts:null,labels:[String(n)],dartObjs:null});};
+    $('#submitQuick').onclick=()=>{
+      const n=+x01.quick;
+      if(x01.quick===''||n<0||n>180){toast('Enter a score from 0 to 180');return;}
+      const p=x01.players[x01.turn];
+      if(x01.out!=='straight' && n===p.score){
+        x01.checkoutPending={score:n,from:p.score};
+        x01.mode='darts';x01.quick='';x01.visit=[];renderX01();return;
+      }
+      commitVisit({score:n,darts:3,finishDarts:null,labels:[String(n)],dartObjs:null});
+    };
   } else {
     $$('[data-m]').forEach(b=>b.onclick=()=>{const m=+b.dataset.m;if(m===0){addDart(0,0);return;}x01.mult=m;renderX01();});
     $$('[data-seg]').forEach(b=>b.onclick=()=>addDart(+b.dataset.seg,x01.mult));
     $('#clearDarts').onclick=()=>{x01.visit=[];renderX01();};
-    $('#submitDarts').onclick=()=>{if(!x01.visit.length){toast('Enter at least one dart');return;} const score=x01.visit.reduce((a,d)=>a+d.score,0); commitVisit({score,darts:x01.visit.length,finishDarts:x01.visit.length,labels:x01.visit.map(d=>d.label),dartObjs:[...x01.visit]});};
+    $('#submitDarts').onclick=()=>{if(!x01.visit.length){toast('Enter at least one dart');return;} const score=x01.visit.reduce((a,d)=>a+d.score,0); x01.checkoutPending=null; commitVisit({score,darts:x01.visit.length,finishDarts:x01.visit.length,labels:x01.visit.map(d=>d.label),dartObjs:[...x01.visit]});};
   }
 }
 function addDart(seg,m){
@@ -318,7 +337,7 @@ function addDart(seg,m){
   x01.visit.push({seg,m,score,label,isDouble,isTriple}); renderX01();
 }
 function snapshot(){return JSON.stringify({players:x01.players,turn:x01.turn,legNo:x01.legNo});}
-function undoX01(){if(!x01.history.length){toast('Nothing to undo');return;}const s=JSON.parse(x01.history.pop());x01.players=s.players;x01.turn=s.turn;x01.legNo=s.legNo;x01.quick='';x01.visit=[];renderX01();}
+function undoX01(){if(!x01.history.length){toast('Nothing to undo');return;}const s=JSON.parse(x01.history.pop());x01.players=s.players;x01.turn=s.turn;x01.legNo=s.legNo;x01.quick='';x01.visit=[];x01.checkoutPending=null;renderX01();}
 
 function commitVisit(v){
   const g=x01, p=g.players[g.turn], before=p.score; g.history.push(snapshot());
@@ -336,8 +355,7 @@ function commitVisit(v){
     if(remaining===0){
       if(g.out==='straight') finish=true;
       else if(!dartObjs){
-        g.history.pop(); g.mode='darts'; g.quick=''; g.visit=[];
-        toast('Enter the finishing visit dart-by-dart so the out can be validated',2800); renderX01(); return;
+        g.history.pop(); g.checkoutPending={score:v.score,from:before}; g.mode='darts'; g.quick=''; g.visit=[]; renderX01(); return;
       }
       else {
         const last=dartObjs[dartObjs.length-1];
@@ -355,9 +373,9 @@ function commitVisit(v){
   p.highestVisit=Math.max(p.highestVisit,scored); if(scored===180)p.c180++; if(scored>=140)p.c140++; if(scored>=100)p.c100++;
   p.visits.push(scored);
   if(finish){checkoutValue=before;p.checkouts++;p.highestCheckout=Math.max(p.highestCheckout,checkoutValue);p.legs++; toast(`${p.name} wins the leg!`,2400); const needed=Math.floor(g.bestOf/2)+1; if(p.legs>=needed){finishMatch(p);return;} startNextLeg();return;}
-  g.turn=(g.turn+1)%g.players.length; g.quick=''; g.visit=[]; renderX01();
+  g.turn=(g.turn+1)%g.players.length; g.quick=''; g.visit=[]; g.checkoutPending=null; renderX01();
 }
-function startNextLeg(){const g=x01;g.legNo++;g.turn=(g.legNo-1)%g.players.length;g.players.forEach(p=>{p.score=g.start;p.in=false;p.first9Points=0;p.first9Darts=0;});g.quick='';g.visit=[];renderX01();}
+function startNextLeg(){const g=x01;g.legNo++;g.turn=(g.legNo-1)%g.players.length;g.players.forEach(p=>{p.score=g.start;p.in=false;p.first9Points=0;p.first9Darts=0;});g.quick='';g.visit=[];g.checkoutPending=null;renderX01();}
 async function finishMatch(winner){
   setGameplayActive(false);
   const g=x01; g.finished=true;
@@ -492,28 +510,40 @@ function cricketDart(seg,m){
 
 function practiceMenu(){
   setGameplayActive(false);
-  const modes=[['🎯','Checkout Trainer','Random finishes with route advice.','checkout'],['🔢','121','Climb through checkouts from 121.','121'],['🎯','Bob’s 27','Work through every double.','bobs27'],['⭕','Doubles Around Board','Track hits from D1 to Bull.','doubles'],['🔥','Scoring Trainer','Fixed visits for maximum scoring.','scoring'],['👤','Solo X01','Play 301/501/701 against yourself.','solox01']];
-  view.innerHTML=`<div class="section-title"><h2>Solo practice</h2></div><div class="grid">${modes.map(m=>`<button class="card click" data-practice="${m[3]}" style="text-align:left;color:inherit"><div class="emoji">${m[0]}</div><h2>${m[1]}</h2><p class="muted">${m[2]}</p></button>`).join('')}</div>`;
+  const modes=[['🎯','Checkout Trainer','Random finishes with route advice.','checkout'],['🔢','121','Finish each target within 9 darts.','121'],['🎯','Bob’s 27','Work through every double.','bobs27'],['⭕','Doubles Around Board','Track hits from D1 to Bull.','doubles'],['🔥','Scoring Trainer','Fixed visits for maximum scoring.','scoring']];
+  view.innerHTML=`<div class="section-title"><h2>Training</h2><span class="muted">Focused practice games</span></div><div class="grid">${modes.map(m=>`<button class="card click" data-practice="${m[3]}" style="text-align:left;color:inherit"><div class="emoji">${m[0]}</div><h2>${m[1]}</h2><p class="muted">${m[2]}</p></button>`).join('')}</div>`;
   $$('[data-practice]').forEach(b=>b.onclick=()=>practiceSetup(b.dataset.practice));
 }
 async function practiceSetup(mode){
   setGameplayActive(false);
   await loadPlayers(); if(!players.length){route('players');return;}
-  view.innerHTML=`<div class="section-title"><h2>${practiceName(mode)}</h2></div><div class="card"><div class="form-grid"><label>Player<select id="pracPlayer">${players.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select></label>${mode==='solox01'?'<label>Starting score<select id="pracStart"><option>301</option><option selected>501</option><option>701</option></select></label>':''}</div><div class="actions"><button class="btn primary big" id="startPractice">Start</button></div></div>`;
-  $('#startPractice').onclick=()=>{if(mode==='solox01'){const id=+$('#pracPlayer').value;startX01({start:+$('#pracStart').value,ids:[id],doubleIn:false,out:'double',bestOf:1,mode:'darts'});return;} startPractice(mode,+$('#pracPlayer').value);};
+  view.innerHTML=`<div class="section-title"><h2>${practiceName(mode)}</h2></div><div class="card"><div class="form-grid"><label>Player<select id="pracPlayer">${players.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select></label></div><div class="actions"><button class="btn primary big" id="startPractice">Start</button></div></div>`;
+  $('#startPractice').onclick=()=>startPractice(mode,+$('#pracPlayer').value);
 }
-function practiceName(m){return ({checkout:'Checkout Trainer','121':'121',bobs27:"Bob's 27",doubles:'Doubles Around Board',scoring:'Scoring Trainer',solox01:'Solo X01'})[m]}
+function practiceName(m){return ({checkout:'Checkout Trainer','121':'121',bobs27:"Bob's 27",doubles:'Doubles Around Board',scoring:'Scoring Trainer'})[m]}
 function startPractice(mode,playerId){
   setGameplayActive(true);
   const p=players.find(x=>x.id===playerId);
-  practice={mode,player:p,round:1,score:mode==='bobs27'?27:0,target:mode==='121'?121:mode==='checkout'?randomCheckout():mode==='doubles'?1:20,hits:0,attempts:0,visits:0,total:0};renderPractice();
+  practice={mode,player:p,round:1,score:mode==='bobs27'?27:0,target:mode==='121'?121:mode==='checkout'?randomCheckout():mode==='doubles'?1:20,hits:0,attempts:0,visits:0,total:0,targetVisit:1};renderPractice();
 }
 function randomCheckout(){const choices=[];for(let n=40;n<=170;n++)if(getCheckout(n,'double'))choices.push(n);return choices[Math.floor(Math.random()*choices.length)];}
 function renderPractice(){
   const g=practice;
-  if(g.mode==='checkout'||g.mode==='121'){
+  if(g.mode==='checkout'){
     view.innerHTML=`<div class="section-title"><h2>${practiceName(g.mode)}</h2><span class="muted">Round ${g.round}</span></div><div class="card"><div class="target-big">${g.target}</div><div class="checkout"><strong>Route:</strong> ${(getCheckout(g.target,'double')||['No route']).join(' → ')}</div><p class="muted" style="text-align:center">Did you finish it within 3 darts?</p><div class="actions"><button class="btn primary big" data-pr="hit">Checkout ✓</button><button class="btn big" data-pr="miss">Miss</button></div><p class="game-status">${g.hits} checkouts from ${g.attempts} attempts</p></div>`;
-    $$('[data-pr]').forEach(b=>b.onclick=()=>{g.attempts++;if(b.dataset.pr==='hit'){g.hits++;g.target=g.mode==='121'?g.target+1:randomCheckout();}else if(g.mode==='checkout')g.target=randomCheckout();g.round++;renderPractice();});
+    $$('[data-pr]').forEach(b=>b.onclick=()=>{g.attempts++;if(b.dataset.pr==='hit'){g.hits++;}g.target=randomCheckout();g.round++;renderPractice();});
+  } else if(g.mode==='121'){
+    const dartsLeft=(4-g.targetVisit)*3;
+    const openingRoute=(getCheckout(g.target,'double')||['No opening checkout route']).join(' → ');
+    const finalVisit=g.targetVisit===3;
+    view.innerHTML=`<div class="section-title"><h2>121</h2><span class="muted">Target attempt ${g.round}</span></div><div class="card"><div class="target-big">${g.target}</div><div class="practice-progress"><strong>Visit ${g.targetVisit} of 3</strong><span>${dartsLeft} darts remaining</span></div><div class="checkout"><strong>${g.targetVisit===1?'Opening route':'Starting target route'}:</strong> ${openingRoute}</div><p class="muted" style="text-align:center">${finalVisit?'Last 3 darts to finish '+g.target+'.':'Throw your next 3 darts. If you finish the target, record the checkout.'}</p><div class="actions"><button class="btn primary big" data-121="hit">Checkout ✓</button><button class="btn big" data-121="miss">${finalVisit?'Failed after 9 darts':'No checkout · next 3 darts'}</button></div><p class="game-status">${g.hits} successful checkouts from ${g.attempts} completed 9-dart attempts</p></div>`;
+    $$('[data-121]').forEach(b=>b.onclick=()=>{
+      if(b.dataset['121']==='hit'){
+        g.hits++;g.attempts++;g.target++;g.round++;g.targetVisit=1;toast(`Checked out ${g.target-1} — next target ${g.target}`,2200);renderPractice();return;
+      }
+      if(g.targetVisit<3){g.targetVisit++;renderPractice();return;}
+      g.attempts++;g.round++;g.targetVisit=1;toast(`${g.target} not finished in 9 darts — try it again`,2400);renderPractice();
+    });
   } else if(g.mode==='bobs27'||g.mode==='doubles'){
     const num=g.target, value=num===21?25:num;
     view.innerHTML=`<div class="section-title"><h2>${practiceName(g.mode)}</h2><span class="muted">${g.mode==='bobs27'?'Score '+g.score:`Hits ${g.hits}`}</span></div><div class="card"><div class="target-big">${num===21?'Bull':'D'+num}</div><p class="muted" style="text-align:center">How many of your three darts hit?</p><div class="actions">${[0,1,2,3].map(n=>`<button class="btn ${n?'primary':''}" data-dhits="${n}">${n}</button>`).join('')}</div></div>`;
