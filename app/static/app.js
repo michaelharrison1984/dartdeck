@@ -17,6 +17,7 @@ let deferredInstallPrompt = null;
 let wakeLock = null;
 let gameplayActive = false;
 let serviceWorkerReady = false;
+const APP_VERSION = '0.2.1';
 
 const FONT_STACKS = {
   modern:'Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif',
@@ -186,6 +187,7 @@ async function settingsView(){
       </div>
       <div class="card">
         <h3>PWA status</h3>
+        ${statusRow(true,`DartDeck v${APP_VERSION}`)}
         ${statusRow(secure,secure?'Secure context: yes':'Secure context: no — use HTTPS')}
         ${statusRow(sw,sw?'Service worker supported':'Service worker not supported')}
         ${statusRow(wake,wake?'Screen Wake Lock supported':'Screen Wake Lock unavailable')}
@@ -532,12 +534,29 @@ async function finishPractice(){
   $('#pracAgain').onclick=()=>practiceSetup(g.mode);$('#pracHome').onclick=home;
 }
 
-function route(name){
+async function route(name){
   view.dataset.page=name;
   window.scrollTo({top:0,behavior:'smooth'});
-  if(name==='home')home(); else if(name==='players')playerManager(); else if(name==='stats')statsView(); else if(name==='settings')settingsView(); else if(name==='x01-setup')x01Setup(); else if(name==='party-menu')partyMenu(); else if(name==='practice-menu')practiceMenu();
+  try{
+    if(name==='home') return home();
+    if(name==='players') return await playerManager();
+    if(name==='stats') return await statsView();
+    if(name==='settings') return await settingsView();
+    if(name==='x01-setup') return await x01Setup();
+    if(name==='party-menu') return partyMenu();
+    if(name==='practice-menu') return practiceMenu();
+    return home();
+  }catch(err){
+    console.error('DartDeck route error', name, err);
+    view.innerHTML=`<div class="card"><h2>Could not open ${esc(name)}</h2><p class="muted">${esc(err?.message||'Unexpected error')}</p><button class="btn primary" id="routeHome">Back home</button></div>`;
+    $('#routeHome').onclick=()=>route('home');
+  }
 }
-$$('[data-nav]').forEach(b=>b.onclick=()=>route(b.dataset.nav));
+// Delegated navigation survives page re-renders and avoids stale per-button handlers.
+document.addEventListener('click', event=>{
+  const button=event.target.closest('[data-nav]');
+  if(button){ event.preventDefault(); route(button.dataset.nav); }
+});
 $('#installApp').onclick=installPwa;
 if('serviceWorker' in navigator){
   navigator.serviceWorker.register('/service-worker.js').then(()=>navigator.serviceWorker.ready).then(()=>{serviceWorkerReady=true;if(view.dataset.page==='settings')settingsView();}).catch(()=>{});

@@ -1,4 +1,4 @@
-# DartDeck v0.2
+# DartDeck v0.2.1 v0.2
 
 A self-hosted darts scoring and practice PWA for Docker / Portainer.
 
@@ -133,3 +133,7 @@ Rebuilding or replacing the DartDeck container does not remove this data as long
 
 - Double-in is intentionally forced to dart-by-dart input because DartDeck needs to know which dart opened the leg.
 - A finishing visit in double-out/master-out also needs dart-by-dart input so the final dart can be validated.
+
+
+## Updating from v0.2
+This build adds cache-busting for the main JavaScript/CSS and forces the app shell to refresh after updates. Redeploy/rebuild the container, then reload DartDeck once. Existing data in the `dartdeck_data` volume is preserved.
