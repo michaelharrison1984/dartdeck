@@ -17,7 +17,7 @@ let deferredInstallPrompt = null;
 let wakeLock = null;
 let gameplayActive = false;
 let serviceWorkerReady = false;
-const APP_VERSION = '0.3.0';
+const APP_VERSION = '0.4.0';
 
 const FONT_STACKS = {
   modern:'Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif',
@@ -70,18 +70,16 @@ window.addEventListener('appinstalled',()=>{deferredInstallPrompt=null;updateIns
 
 async function releaseWakeLock(){
   if(wakeLock){ try{await wakeLock.release();}catch(e){} wakeLock=null; }
-  $('#wakeBadge')?.classList.add('hidden');
 }
 async function syncWakeLock(){
   const should=gameplayActive && appSettings.keep_awake && document.visibilityState==='visible';
   if(!should){await releaseWakeLock();return;}
-  if(!window.isSecureContext || !('wakeLock' in navigator)){ $('#wakeBadge')?.classList.add('hidden'); return; }
+  if(!window.isSecureContext || !('wakeLock' in navigator)) return;
   if(wakeLock)return;
   try{
     wakeLock=await navigator.wakeLock.request('screen');
-    $('#wakeBadge')?.classList.remove('hidden');
-    wakeLock.addEventListener('release',()=>{wakeLock=null;$('#wakeBadge')?.classList.add('hidden');});
-  }catch(e){wakeLock=null;$('#wakeBadge')?.classList.add('hidden');}
+    wakeLock.addEventListener('release',()=>{wakeLock=null;});
+  }catch(e){wakeLock=null;}
 }
 function setGameplayActive(active){ gameplayActive=!!active; syncWakeLock(); }
 document.addEventListener('visibilitychange',()=>syncWakeLock());
@@ -107,8 +105,8 @@ function home(){
   view.innerHTML = `
     <div class="grid">
       ${homeCard('🎯','Quick Game','301, 501 or 701 for up to four players.','x01-setup')}
-      ${homeCard('👥','Party Games','Cricket, Killer, Shanghai and more.','party-menu')}
-      ${homeCard('🏋️','Training','Checkouts, doubles and scoring drills.','practice-menu')}
+      ${homeCard('👥','Party Games','Cricket, Killer, Shanghai and Halve-It.','party-menu')}
+      ${homeCard('🏋️','Training','Checkout practice, 121 and Bob’s 27.','practice-menu')}
       ${homeCard('📊','Stats','Lifetime averages, 180s and checkout data.','stats')}
     </div>
     <div class="section-title"><h2>Designed for the oche</h2></div>
@@ -442,76 +440,199 @@ function setupSuggestion(score,out){
 
 function partyMenu(){
   setGameplayActive(false);
-  const games=[['🏏','Cricket','Close 15–20 + Bull, with scoring.','cricket'],['👑','Killer','Earn killer status, then take opponents’ lives.','killer'],['🌏','Shanghai','Seven rounds; S+D+T wins instantly.','shanghai'],['✂️','Halve-It','Miss the target and your score is halved.','halveit'],['⏰','Around the Clock','Race from 1 through 20.','around'],['💯','Count-Up','Highest total after the chosen rounds wins.','countup']];
-  view.innerHTML=`<div class="section-title"><h2>Party games</h2></div><div class="grid">${games.map(g=>`<button class="card click" data-party="${g[3]}" style="text-align:left;color:inherit"><div class="emoji">${g[0]}</div><h2>${g[1]}</h2><p class="muted">${g[2]}</p></button>`).join('')}</div>`;
+  const games=[
+    ['🏏','Cricket','Close 15–20 + Bull and score on numbers you own.','cricket'],
+    ['👑','Killer','Become a Killer, then knock lives off your opponents.','killer'],
+    ['🌏','Shanghai','Three darts per number — hit S + D + T for an instant win.','shanghai'],
+    ['✂️','Halve-It','Score on each target; miss all three and your score is halved.','halveit']
+  ];
+  view.innerHTML=`<div class="section-title"><h2>Party games</h2><span class="muted">Four games worth keeping score for</span></div><div class="grid">${games.map(g=>`<button class="card click" data-party="${g[3]}" style="text-align:left;color:inherit"><div class="emoji">${g[0]}</div><h2>${g[1]}</h2><p class="muted">${g[2]}</p></button>`).join('')}</div>`;
   $$('[data-party]').forEach(b=>b.onclick=()=>partySetup(b.dataset.party));
 }
 async function partySetup(type){
   setGameplayActive(false);
   await loadPlayers(); if(players.length<1){route('players');return;}
   const opts=players.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('');
-  view.innerHTML=`<div class="section-title"><h2>${partyName(type)}</h2></div><div class="card"><div class="form-grid"><label>Players<select id="pc"><option>1</option><option selected>2</option><option>3</option><option>4</option></select></label><label>Rounds / lives<input id="rounds" type="number" min="1" max="20" value="${type==='killer'?3:type==='countup'?8:type==='shanghai'?7:7}"></label></div><div id="ps" class="form-grid" style="margin-top:12px"></div><div class="actions"><button class="btn primary big" id="startParty">Start</button></div></div>`;
-  const rs=()=>{$('#ps').innerHTML=Array.from({length:+$('#pc').value},(_,i)=>`<label>Player ${i+1}<select class="pp">${opts}</select></label>`).join('');$$('.pp').forEach((s,i)=>s.selectedIndex=Math.min(i,players.length-1));};rs();$('#pc').onchange=rs;
-  $('#startParty').onclick=()=>{const ids=$$('.pp').map(s=>+s.value);if(new Set(ids).size!==ids.length){toast('Choose different players');return;} startParty(type,ids,+$('#rounds').value);};
+  const minPlayers=(type==='cricket'||type==='killer')?2:1;
+  if(players.length<minPlayers){toast(`${partyName(type)} needs at least ${minPlayers} players`);route('players');return;}
+  const maxPlayers=Math.min(4,players.length);
+  const defaultPlayers=Math.min(type==='killer'?3:2,maxPlayers);
+  const countOptions=Array.from({length:maxPlayers-minPlayers+1},(_,i)=>i+minPlayers).map(n=>`<option ${n===defaultPlayers?'selected':''}>${n}</option>`).join('');
+  const extra=type==='killer'?`<label>Starting lives<select id="rounds"><option>2</option><option selected>3</option><option>4</option><option>5</option></select></label>`:'';
+  const setupHelp={
+    cricket:'Use 2–4 players. Only 15–20 and Bull count.',
+    killer:'Choose each player’s unique number — traditionally this is claimed by throwing one dart with the non-dominant hand.',
+    shanghai:'Seven rounds: targets 1 through 7.',
+    halveit:'Seven targets: 20, 16, D7, 14, T10, 17, Bull.'
+  }[type];
+  view.innerHTML=`<div class="section-title"><h2>${partyName(type)}</h2></div><div class="card"><p class="muted">${setupHelp}</p><div class="form-grid"><label>Players<select id="pc">${countOptions}</select></label>${extra}</div><div id="ps" class="form-grid" style="margin-top:12px"></div><div class="actions"><button class="btn primary big" id="startParty">Start</button></div></div>`;
+  const numOpts=Array.from({length:20},(_,i)=>`<option value="${i+1}">${i+1}</option>`).join('');
+  const rs=()=>{
+    const n=+$('#pc').value;
+    $('#ps').innerHTML=Array.from({length:n},(_,i)=>`<label>Player ${i+1}<select class="pp">${opts}</select></label>${type==='killer'?`<label>${i===0?'Killer numbers':'Number'}<select class="knum">${numOpts}</select></label>`:''}`).join('');
+    $$('.pp').forEach((el,i)=>el.selectedIndex=Math.min(i,players.length-1));
+    $$('.knum').forEach((el,i)=>el.value=String(i+1));
+  };
+  rs(); $('#pc').onchange=rs;
+  $('#startParty').onclick=()=>{
+    const ids=$$('.pp').map(el=>+el.value);
+    if(new Set(ids).size!==ids.length){toast('Choose different players');return;}
+    const nums=type==='killer'?$$('.knum').map(el=>+el.value):[];
+    if(type==='killer'&&new Set(nums).size!==nums.length){toast('Each Killer player needs a different number');return;}
+    const rounds=type==='killer'?+$('#rounds').value:(type==='shanghai'||type==='halveit'?7:0);
+    startParty(type,ids,rounds,nums);
+  };
 }
-function partyName(t){return ({cricket:'Cricket',killer:'Killer',shanghai:'Shanghai',halveit:'Halve-It',around:'Around the Clock',countup:'Count-Up'})[t]}
-function startParty(type,ids,rounds){
+function partyName(t){return ({cricket:'Cricket',killer:'Killer',shanghai:'Shanghai',halveit:'Halve-It'})[t]}
+function startParty(type,ids,rounds,killerNumbers=[]){
   setGameplayActive(true);
   const ps=ids.map(id=>players.find(p=>p.id===id));
-  party={type,rounds,turn:0,round:1,players:ps.map((p,i)=>({id:p.id,name:p.name,score:0,target:1,lives:rounds,killer:false,number:i+1,marks:{15:0,16:0,17:0,18:0,19:0,20:0,25:0}})),darts:0,finished:false};
-  if(type==='killer'){party.players.forEach((p,i)=>p.number=[1,3,5,7,9,11,13,15,17,19][i]);}
+  party={type,rounds,turn:0,round:1,darts:0,mult:1,quick:'',visit:[],finished:false,players:ps.map((p,i)=>({id:p.id,name:p.name,score:0,lives:rounds,killer:false,number:killerNumbers[i]||i+1,marks:{15:0,16:0,17:0,18:0,19:0,20:0,25:0}}))};
   renderParty();
 }
 function renderParty(){
-  const g=party,p=g.players[g.turn];
-  if(g.type==='cricket')return renderCricket();
-  const info={killer:`${p.killer?'KILLER · choose opponent':'Hit your own number '+p.number}`,shanghai:`Round ${g.round} · target ${g.round}`,halveit:`Round ${g.round} · ${halveTarget(g.round)}`,around:`Target ${p.target}`,countup:`Round ${g.round} of ${g.rounds}`}[g.type];
-  view.innerHTML=`<div class="section-title"><h2>${partyName(g.type)}</h2><span class="muted">${info}</span></div><div class="scoreboard">${g.players.map((x,i)=>`<div class="player-score ${i===g.turn?'active':''}"><div class="name">${esc(x.name)}</div><div class="score">${g.type==='around'?x.target:g.type==='killer'?x.lives:x.score}</div><div class="meta"><span>${g.type==='killer'?(x.killer?'Killer':'Number '+x.number):g.type==='around'?'next target':'score'}</span></div></div>`).join('')}</div><div class="card">${partyControls(g,p)}</div>`;
-  bindParty();
+  if(party.type==='cricket')return renderCricket();
+  if(party.type==='killer')return renderKiller();
+  if(party.type==='shanghai')return renderShanghai();
+  if(party.type==='halveit')return renderHalveIt();
 }
-function partyControls(g,p){
-  if(g.type==='countup')return visitNumberControl('Enter visit score (0–180)');
-  if(g.type==='around')return `<div class="target-big">${p.target>20?'🏁':p.target}</div><p class="muted" style="text-align:center">How many targets did you hit in sequence this turn?</p><div class="actions">${[0,1,2,3].map(n=>`<button class="btn ${n?'primary':''}" data-around="${n}">${n}</button>`).join('')}</div>`;
-  if(g.type==='shanghai')return `<p class="muted" style="text-align:center">Enter the points scored on ${g.round}, then mark which beds you hit.</p>${visitNumberControl('Round score')}<div class="segment-row"><label><input type="checkbox" id="shS"> Single</label><label><input type="checkbox" id="shD"> Double</label><label><input type="checkbox" id="shT"> Treble</label></div>`;
-  if(g.type==='halveit')return `<p class="muted" style="text-align:center">Target: <strong>${halveTarget(g.round)}</strong>. Enter points scored on that target only. Zero halves your total.</p>${visitNumberControl('Points on target')}`;
-  if(g.type==='killer'){
-    if(!p.killer)return `<div class="target-big">${p.number}</div><p class="muted" style="text-align:center">Enter marks on your own number this turn (single=1, double=2, treble=3).</p><div class="actions">${[0,1,2,3].map(n=>`<button class="btn ${n?'primary':''}" data-killermarks="${n}">${n}</button>`).join('')}</div>`;
-    const opp=g.players.filter((_,i)=>i!==g.turn && _.lives>0);return `<label>Opponent<select id="opp">${opp.map(o=>`<option value="${o.id}">${esc(o.name)} · ${o.lives} lives</option>`).join('')}</select></label><p class="muted">Marks landed on their number:</p><div class="actions">${[0,1,2,3].map(n=>`<button class="btn ${n?'primary':''}" data-attack="${n}">${n}</button>`).join('')}</div>`;
+function partyQuickPad(prefix,value,label='Enter visit score'){
+  return `<div class="quick-score-block"><div class="quick-score-label">${label}</div><div class="quick-total" id="${prefix}QuickTotal">${value||'—'}</div><div class="keypad">${[1,2,3,4,5,6,7,8,9,'C',0,'⌫'].map(k=>`<button data-qpad="${prefix}" data-key="${k}">${k}</button>`).join('')}</div><div class="actions"><button class="btn primary big" id="${prefix}QuickSubmit">Submit visit</button></div></div>`;
+}
+function bindPartyQuickPad(prefix,state,onSubmit){
+  $$(`[data-qpad="${prefix}"]`).forEach(b=>b.onclick=()=>{
+    const k=b.dataset.key;
+    if(k==='C')state.quick=''; else if(k==='⌫')state.quick=state.quick.slice(0,-1); else if(state.quick.length<3)state.quick+=k;
+    $(`#${prefix}QuickTotal`).textContent=state.quick||'—';
+  });
+  $(`#${prefix}QuickSubmit`).onclick=()=>{
+    if(state.quick===''){toast('Enter a score from 0 to 180');return;}
+    const n=+state.quick;
+    if(n<0||n>180){toast('Enter a score from 0 to 180');return;}
+    onSubmit(n);
+  };
+}
+function scoreCards(g,metaFn=(x)=>'score'){
+  return `<div class="scoreboard">${g.players.map((x,i)=>`<div class="player-score ${i===g.turn?'active':''}"><div class="name">${esc(x.name)} ${i===g.turn?'●':''}</div><div class="score">${x.score}</div><div class="meta"><span>${metaFn(x)}</span></div></div>`).join('')}</div>`;
+}
+function advanceRoundGame(){
+  const g=party; g.quick='';g.visit=[];g.darts=0;g.turn++;
+  if(g.turn>=g.players.length){g.turn=0;g.round++;}
+  if(g.round>g.rounds){
+    const max=Math.max(...g.players.map(p=>p.score));
+    partyWinner(g.players.find(p=>p.score===max));return;
   }
+  renderParty();
 }
-function visitNumberControl(ph){return `<label>${ph}<input id="partyScore" type="number" min="0" max="180" value="0"></label><div class="actions"><button class="btn primary big" id="partySubmit">Submit</button></div>`}
-function halveTarget(r){return ['20','16','D7','14','T10','17','Bull'][r-1]||'Bull'}
-function bindParty(){
-  const g=party,p=g.players[g.turn];
-  if($('#partySubmit'))$('#partySubmit').onclick=()=>{const n=+$('#partyScore').value||0;if(g.type==='countup'){p.score+=n;nextPartyTurn();}else if(g.type==='shanghai'){p.score+=n;if($('#shS').checked&&$('#shD').checked&&$('#shT').checked){partyWinner(p,'Shanghai!');return;}nextPartyTurn();}else if(g.type==='halveit'){p.score=n===0?Math.floor(p.score/2):p.score+n;nextPartyTurn();}};
-  $$('[data-around]').forEach(b=>b.onclick=()=>{p.target+=+b.dataset.around;if(p.target>20){partyWinner(p);return;}nextPartyTurn(false);});
-  $$('[data-killermarks]').forEach(b=>b.onclick=()=>{if(+b.dataset.killermarks>=3){p.killer=true;toast(`${p.name} is now a Killer!`);}nextPartyTurn(false);});
-  $$('[data-attack]').forEach(b=>b.onclick=()=>{const opp=g.players.find(x=>x.id===+$('#opp').value);opp.lives=Math.max(0,opp.lives-+b.dataset.attack);const alive=g.players.filter(x=>x.lives>0);if(alive.length===1){partyWinner(alive[0]);return;}nextPartyTurn(false);});
+function partyWinner(p,extra=''){
+  setGameplayActive(false);
+  view.innerHTML=`<div class="card"><div class="target-big">🏆</div><h2 style="text-align:center">${esc(p.name)} wins!</h2><p class="muted" style="text-align:center">${extra}</p><div class="actions"><button class="btn primary" id="againP">Play again</button><button class="btn" id="homeP">Home</button></div></div>`;
+  $('#againP').onclick=()=>partySetup(party.type);$('#homeP').onclick=home;
 }
-function nextPartyTurn(roundBased=true){const g=party;g.turn++;if(g.turn>=g.players.length){g.turn=0;if(roundBased)g.round++;}if(roundBased&&g.round>g.rounds){const max=Math.max(...g.players.map(p=>p.score));partyWinner(g.players.find(p=>p.score===max));return;}renderParty();}
-function partyWinner(p,extra=''){setGameplayActive(false);view.innerHTML=`<div class="card"><div class="target-big">🏆</div><h2 style="text-align:center">${esc(p.name)} wins!</h2><p class="muted" style="text-align:center">${extra}</p><div class="actions"><button class="btn primary" id="againP">Play again</button><button class="btn" id="homeP">Home</button></div></div>`;$('#againP').onclick=()=>partySetup(party.type);$('#homeP').onclick=home;}
 
 function renderCricket(){
-  const g=party,p=g.players[g.turn], segs=[20,19,18,17,16,15,25];
-  view.innerHTML=`<div class="section-title"><h2>Cricket</h2><span class="muted">${esc(p.name)} · dart ${g.darts+1}/3</span></div><div class="card table-wrap"><table><thead><tr><th>Player</th>${segs.map(s=>`<th>${s===25?'Bull':s}</th>`).join('')}<th>Pts</th></tr></thead><tbody>${g.players.map((x,i)=>`<tr><td><strong>${esc(x.name)}${i===g.turn?' ●':''}</strong></td>${segs.map(s=>`<td>${cricketMarks(x.marks[s])}</td>`).join('')}<td>${x.score}</td></tr>`).join('')}</tbody></table></div><div class="card"><p class="muted" style="text-align:center">Tap the bed hit. Double/treble adds 2/3 marks. Extra marks score only while an opponent still has that number open.</p><div class="multis"><button data-cm="1" class="${g.mult===1||!g.mult?'active':''}">Single</button><button data-cm="2">Double</button><button data-cm="3">Treble</button><button data-cmiss="1">Miss</button></div><div class="segment-row">${segs.map(s=>`<button data-cseg="${s}">${s===25?'Bull':s}</button>`).join('')}</div></div>`;
+  const g=party,p=g.players[g.turn],segs=[20,19,18,17,16,15,25];
   g.mult=g.mult||1;
+  const rows=segs.map(seg=>{
+    const dead=g.players.every(x=>x.marks[seg]>=3);
+    return `<tr class="${dead?'cricket-dead':''}"><th>${seg===25?'Bull':seg}</th>${g.players.map(x=>`<td class="cricket-mark">${cricketMarks(x.marks[seg])}</td>`).join('')}</tr>`;
+  }).join('');
+  view.innerHTML=`<div class="section-title"><h2>Cricket</h2><span class="muted">${esc(p.name)} · dart ${g.darts+1}/3</span></div>
+  <div class="game-help"><strong>How to win</strong><span>Close 20, 19, 18, 17, 16, 15 and Bull with 3 marks each. Single = 1 mark, Double = 2, Treble = 3. Once you close a target, extra marks score points until every opponent closes it. Close everything while level or ahead on points to win.</span></div>
+  <div class="card table-wrap"><table class="cricket-table"><thead><tr><th>Target</th>${g.players.map((x,i)=>`<th>${esc(x.name)}${i===g.turn?' ●':''}<div class="table-score">${x.score} pts</div></th>`).join('')}</tr></thead><tbody>${rows}</tbody></table><div class="cricket-legend"><span>╱ = 1 mark</span><span>✕ = 2 marks</span><span>⊗ = closed</span></div></div>
+  <div class="card"><div class="current-turn"><strong>${esc(p.name)}</strong><span>Dart ${g.darts+1} of 3</span></div><p class="muted" style="text-align:center">Choose the ring, then tap the number you hit. Bull buttons record the correct marks directly.</p><div class="multis cricket-mults"><button data-cm="1" class="${g.mult===1?'active':''}">Single</button><button data-cm="2" class="${g.mult===2?'active':''}">Double</button><button data-cm="3" class="${g.mult===3?'active':''}">Treble</button></div><div class="cricket-targets">${[20,19,18,17,16,15].map(seg=>`<button data-cseg="${seg}" ${g.players.every(x=>x.marks[seg]>=3)?'disabled':''}>${seg}</button>`).join('')}<button data-cbull="1" ${g.players.every(x=>x.marks[25]>=3)?'disabled':''}>Outer Bull<br><small>1 mark</small></button><button data-cbull="2" ${g.players.every(x=>x.marks[25]>=3)?'disabled':''}>Bullseye<br><small>2 marks</small></button><button class="miss-button" data-cmiss="1">Miss</button></div></div>`;
   $$('[data-cm]').forEach(b=>b.onclick=()=>{g.mult=+b.dataset.cm;renderCricket();});
-  $('[data-cmiss]').onclick=()=>cricketDart(null,0);
   $$('[data-cseg]').forEach(b=>b.onclick=()=>cricketDart(+b.dataset.cseg,g.mult));
+  $$('[data-cbull]').forEach(b=>b.onclick=()=>cricketDart(25,+b.dataset.cbull));
+  $('[data-cmiss]').onclick=()=>cricketDart(null,0);
 }
-function cricketMarks(n){return n>=3?'●':n===2?'◉':n===1?'◐':'—'}
+function cricketMarks(n){return n>=3?'⊗':n===2?'✕':n===1?'╱':'—'}
 function cricketDart(seg,m){
   const g=party,p=g.players[g.turn];
-  if(seg){const before=p.marks[seg], after=before+m, extra=Math.max(0,after-3);p.marks[seg]=Math.min(3,after);const opponentOpen=g.players.some((x,i)=>i!==g.turn&&x.marks[seg]<3);if(extra&&opponentOpen)p.score+=extra*(seg===25?25:seg);}
+  if(seg){
+    const before=p.marks[seg];
+    const room=Math.max(0,3-before);
+    const used=Math.min(room,m);
+    const extra=Math.max(0,m-used);
+    p.marks[seg]=Math.min(3,before+m);
+    const opponentOpen=g.players.some((x,i)=>i!==g.turn&&x.marks[seg]<3);
+    if(extra&&opponentOpen)p.score+=extra*(seg===25?25:seg);
+  }
+  g.darts++;g.mult=1;
+  const closed=Object.values(p.marks).every(v=>v>=3);
+  const oppScores=g.players.filter((_,i)=>i!==g.turn).map(x=>x.score);
+  if(closed&&p.score>=Math.max(0,...oppScores)){partyWinner(p);return;}
+  if(g.darts>=3){g.darts=0;g.turn=(g.turn+1)%g.players.length;}
+  renderCricket();
+}
+
+function renderKiller(){
+  const g=party,p=g.players[g.turn];
+  const alive=g.players.filter(x=>x.lives>0);
+  if(alive.length===1){partyWinner(alive[0]);return;}
+  const cards=g.players.map((x,i)=>`<div class="killer-card ${i===g.turn?'active':''} ${x.lives<=0?'eliminated':''}"><div class="killer-card-top"><strong>${esc(x.name)}</strong><span class="killer-badge ${x.killer?'on':''}">${x.killer?'KILLER':'NOT KILLER'}</span></div><div class="killer-number">D${x.number}</div><div class="killer-lives">${Array.from({length:g.rounds},(_,n)=>`<span class="${n<x.lives?'live':''}">♥</span>`).join('')}</div>${x.lives<=0?'<div class="eliminated-label">OUT</div>':''}</div>`).join('');
+  const attackButtons=g.players.filter(x=>x.id!==p.id&&x.lives>0).map(x=>`<button class="btn killer-attack" data-kattack="${x.id}"><strong>D${x.number}</strong><span>${esc(x.name)} · ${x.lives} ${x.lives===1?'life':'lives'}</span></button>`).join('');
+  const controls=!p.killer?`<div class="target-focus"><span>Your Killer target</span><strong>D${p.number}</strong></div><p class="muted" style="text-align:center">Hit your own double to become a Killer. Once you qualify, any remaining darts this turn can attack.</p><div class="actions"><button class="btn primary big" id="qualifyKiller">Hit D${p.number} ✓</button><button class="btn big" id="killerMiss">Miss</button></div>`:`<div class="target-focus"><span>You are a</span><strong>👑 KILLER</strong></div><p class="muted" style="text-align:center">Each opponent double you hit removes one life. Tap the opponent you hit, or Miss.</p><div class="killer-attack-grid">${attackButtons}</div><div class="actions"><button class="btn big" id="killerMiss">Miss</button></div>`;
+  view.innerHTML=`<div class="section-title"><h2>Killer</h2><span class="muted">${esc(p.name)} · dart ${g.darts+1}/3</span></div><div class="game-help"><strong>This DartDeck version</strong><span>Each player owns one number and starts with ${g.rounds} lives. Hit the <b>double of your own number</b> to become a Killer. Killers remove one life each time they hit an opponent’s double. Last player with lives wins.</span></div><div class="killer-grid">${cards}</div><div class="card">${controls}</div>`;
+  $('#qualifyKiller')?.addEventListener('click',()=>killerDart('qualify'));
+  $('#killerMiss')?.addEventListener('click',()=>killerDart('miss'));
+  $$('[data-kattack]').forEach(b=>b.onclick=()=>killerDart('attack',+b.dataset.kattack));
+}
+function killerDart(action,targetId=null){
+  const g=party,p=g.players[g.turn];
+  if(action==='qualify')p.killer=true;
+  if(action==='attack'){
+    const target=g.players.find(x=>x.id===targetId);
+    if(target&&target.lives>0)target.lives=Math.max(0,target.lives-1);
+  }
   g.darts++;
-  const closed=Object.values(p.marks).every(v=>v>=3); if(closed){const maxOpp=Math.max(...g.players.filter((_,i)=>i!==g.turn).map(x=>x.score));if(p.score>=maxOpp){partyWinner(p);return;}}
-  if(g.darts>=3){g.darts=0;g.turn=(g.turn+1)%g.players.length;} renderCricket();
+  const alive=g.players.filter(x=>x.lives>0);
+  if(alive.length===1){partyWinner(alive[0]);return;}
+  if(g.darts>=3){endKillerTurn();return;}
+  renderKiller();
+}
+function endKillerTurn(){
+  const g=party;g.darts=0;
+  do{g.turn=(g.turn+1)%g.players.length;}while(g.players[g.turn].lives<=0);
+  renderKiller();
+}
+
+function renderShanghai(){
+  const g=party,p=g.players[g.turn],target=g.round;
+  const visitText=g.visit.length?g.visit.map(m=>m===0?'Miss':m===1?`S${target}`:m===2?`D${target}`:`T${target}`).join(' · '):'No darts entered';
+  view.innerHTML=`<div class="section-title"><h2>Shanghai</h2><span class="muted">${esc(p.name)} · dart ${g.darts+1}/3</span></div><div class="target-focus target-focus-large"><span>ROUND ${g.round} OF 7 · CURRENT TARGET</span><strong>${target}</strong></div>${scoreCards(g,()=>`Round ${g.round}`)}<div class="card"><p class="muted" style="text-align:center">Tap what each dart hit. A Single + Double + Treble of the current number in the same visit is an instant Shanghai win.</p><div class="visit-darts"><span class="${g.visit.length?'':'muted'}">${visitText}</span></div><div class="sdt-grid"><button data-sh="1"><strong>S</strong><span>Single ${target}</span></button><button data-sh="2"><strong>D</strong><span>Double ${target}</span></button><button data-sh="3"><strong>T</strong><span>Treble ${target}</span></button><button class="miss-button" data-sh="0"><strong>×</strong><span>Miss</span></button></div></div>`;
+  $$('[data-sh]').forEach(b=>b.onclick=()=>shanghaiDart(+b.dataset.sh));
+}
+function shanghaiDart(mult){
+  const g=party,p=g.players[g.turn],target=g.round;
+  g.visit.push(mult);g.darts++;
+  if(mult>0)p.score+=target*mult;
+  if([1,2,3].every(m=>g.visit.includes(m))){partyWinner(p,'Shanghai! Single + Double + Treble');return;}
+  if(g.darts>=3){g.visit=[];g.darts=0;advanceRoundGame();return;}
+  renderShanghai();
+}
+
+function halveTarget(r){return ['20','16','D7','14','T10','17','Bull'][r-1]||'Bull'}
+function halveHelp(target){
+  if(target==='D7')return 'Only Double 7 counts — enter 14, 28 or 42 for the visit.';
+  if(target==='T10')return 'Only Treble 10 counts — enter 30, 60 or 90 for the visit.';
+  if(target==='Bull')return 'Only Bull counts — outer Bull = 25 and inner Bull = 50.';
+  return `Only hits on ${target} count. Singles, doubles and trebles score their normal value.`;
+}
+function renderHalveIt(){
+  const g=party,p=g.players[g.turn],target=halveTarget(g.round);
+  view.innerHTML=`<div class="section-title"><h2>Halve-It</h2><span class="muted">Round ${g.round} of 7 · ${esc(p.name)}</span></div><div class="target-focus target-focus-large"><span>CURRENT TARGET</span><strong>${target}</strong></div>${scoreCards(g,()=>`Round ${g.round}`)}<div class="card"><p class="muted" style="text-align:center">${halveHelp(target)} Enter the total from your three darts. Enter <b>0</b> if you missed the target completely — your running score will be halved.</p>${partyQuickPad('halve',g.quick,'Points scored on this target')}</div>`;
+  bindPartyQuickPad('halve',g,n=>{p.score=n===0?Math.floor(p.score/2):p.score+n;g.quick='';advanceRoundGame();});
 }
 
 function practiceMenu(){
   setGameplayActive(false);
-  const modes=[['🎯','Checkout Trainer','Random finishes with route advice.','checkout'],['🔢','121','Finish each target within 9 darts.','121'],['🎯','Bob’s 27','Work through every double.','bobs27'],['⭕','Doubles Around Board','Track hits from D1 to Bull.','doubles'],['🔥','Scoring Trainer','Fixed visits for maximum scoring.','scoring']];
-  view.innerHTML=`<div class="section-title"><h2>Training</h2><span class="muted">Focused practice games</span></div><div class="grid">${modes.map(m=>`<button class="card click" data-practice="${m[3]}" style="text-align:left;color:inherit"><div class="emoji">${m[0]}</div><h2>${m[1]}</h2><p class="muted">${m[2]}</p></button>`).join('')}</div>`;
+  const modes=[
+    ['🎯','Checkout Trainer','Random finishes with route advice.','checkout'],
+    ['🔢','121','Keep a running total and finish each target within 9 darts.','121'],
+    ['🎯','Bob’s 27','D1 through D20, then Bull — three darts at every double.','bobs27']
+  ];
+  view.innerHTML=`<div class="section-title"><h2>Training</h2><span class="muted">Focused practice that benefits from a scorer</span></div><div class="grid">${modes.map(m=>`<button class="card click" data-practice="${m[3]}" style="text-align:left;color:inherit"><div class="emoji">${m[0]}</div><h2>${m[1]}</h2><p class="muted">${m[2]}</p></button>`).join('')}</div>`;
   $$('[data-practice]').forEach(b=>b.onclick=()=>practiceSetup(b.dataset.practice));
 }
 async function practiceSetup(mode){
@@ -520,47 +641,84 @@ async function practiceSetup(mode){
   view.innerHTML=`<div class="section-title"><h2>${practiceName(mode)}</h2></div><div class="card"><div class="form-grid"><label>Player<select id="pracPlayer">${players.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select></label></div><div class="actions"><button class="btn primary big" id="startPractice">Start</button></div></div>`;
   $('#startPractice').onclick=()=>startPractice(mode,+$('#pracPlayer').value);
 }
-function practiceName(m){return ({checkout:'Checkout Trainer','121':'121',bobs27:"Bob's 27",doubles:'Doubles Around Board',scoring:'Scoring Trainer'})[m]}
+function practiceName(m){return ({checkout:'Checkout Trainer','121':'121',bobs27:"Bob's 27"})[m]}
 function startPractice(mode,playerId){
   setGameplayActive(true);
   const p=players.find(x=>x.id===playerId);
-  practice={mode,player:p,round:1,score:mode==='bobs27'?27:0,target:mode==='121'?121:mode==='checkout'?randomCheckout():mode==='doubles'?1:20,hits:0,attempts:0,visits:0,total:0,targetVisit:1};renderPractice();
+  practice={mode,player:p,round:1,score:mode==='bobs27'?27:0,target:mode==='121'?121:mode==='checkout'?randomCheckout():1,remaining:mode==='121'?121:0,hits:0,attempts:0,targetVisit:1,quick:'',checkoutPending:false,busted:false,lastTarget:null};
+  renderPractice();
 }
 function randomCheckout(){const choices=[];for(let n=40;n<=170;n++)if(getCheckout(n,'double'))choices.push(n);return choices[Math.floor(Math.random()*choices.length)];}
 function renderPractice(){
   const g=practice;
-  if(g.mode==='checkout'){
-    view.innerHTML=`<div class="section-title"><h2>${practiceName(g.mode)}</h2><span class="muted">Round ${g.round}</span></div><div class="card"><div class="target-big">${g.target}</div><div class="checkout"><strong>Route:</strong> ${(getCheckout(g.target,'double')||['No route']).join(' → ')}</div><p class="muted" style="text-align:center">Did you finish it within 3 darts?</p><div class="actions"><button class="btn primary big" data-pr="hit">Checkout ✓</button><button class="btn big" data-pr="miss">Miss</button></div><p class="game-status">${g.hits} checkouts from ${g.attempts} attempts</p></div>`;
-    $$('[data-pr]').forEach(b=>b.onclick=()=>{g.attempts++;if(b.dataset.pr==='hit'){g.hits++;}g.target=randomCheckout();g.round++;renderPractice();});
-  } else if(g.mode==='121'){
-    const dartsLeft=(4-g.targetVisit)*3;
-    const openingRoute=(getCheckout(g.target,'double')||['No opening checkout route']).join(' → ');
-    const finalVisit=g.targetVisit===3;
-    view.innerHTML=`<div class="section-title"><h2>121</h2><span class="muted">Target attempt ${g.round}</span></div><div class="card"><div class="target-big">${g.target}</div><div class="practice-progress"><strong>Visit ${g.targetVisit} of 3</strong><span>${dartsLeft} darts remaining</span></div><div class="checkout"><strong>${g.targetVisit===1?'Opening route':'Starting target route'}:</strong> ${openingRoute}</div><p class="muted" style="text-align:center">${finalVisit?'Last 3 darts to finish '+g.target+'.':'Throw your next 3 darts. If you finish the target, record the checkout.'}</p><div class="actions"><button class="btn primary big" data-121="hit">Checkout ✓</button><button class="btn big" data-121="miss">${finalVisit?'Failed after 9 darts':'No checkout · next 3 darts'}</button></div><p class="game-status">${g.hits} successful checkouts from ${g.attempts} completed 9-dart attempts</p></div>`;
-    $$('[data-121]').forEach(b=>b.onclick=()=>{
-      if(b.dataset['121']==='hit'){
-        g.hits++;g.attempts++;g.target++;g.round++;g.targetVisit=1;toast(`Checked out ${g.target-1} — next target ${g.target}`,2200);renderPractice();return;
-      }
-      if(g.targetVisit<3){g.targetVisit++;renderPractice();return;}
-      g.attempts++;g.round++;g.targetVisit=1;toast(`${g.target} not finished in 9 darts — try it again`,2400);renderPractice();
-    });
-  } else if(g.mode==='bobs27'||g.mode==='doubles'){
-    const num=g.target, value=num===21?25:num;
-    view.innerHTML=`<div class="section-title"><h2>${practiceName(g.mode)}</h2><span class="muted">${g.mode==='bobs27'?'Score '+g.score:`Hits ${g.hits}`}</span></div><div class="card"><div class="target-big">${num===21?'Bull':'D'+num}</div><p class="muted" style="text-align:center">How many of your three darts hit?</p><div class="actions">${[0,1,2,3].map(n=>`<button class="btn ${n?'primary':''}" data-dhits="${n}">${n}</button>`).join('')}</div></div>`;
-    $$('[data-dhits]').forEach(b=>b.onclick=()=>{const h=+b.dataset.dhits;g.hits+=h;g.attempts+=3;if(g.mode==='bobs27'){g.score+=h?value*2*h:-(value*2);}g.target++;if(g.target>21){finishPractice();return;}renderPractice();});
-  } else if(g.mode==='scoring'){
-    view.innerHTML=`<div class="section-title"><h2>Scoring Trainer</h2><span class="muted">Visit ${g.visits+1}/20</span></div><div class="card"><div class="target-big">${g.total}</div><label>Visit score<input id="scoreVisit" type="number" min="0" max="180" value="60"></label><div class="actions"><button class="btn primary big" id="scoreSubmit">Submit</button></div><p class="game-status">Average: ${fmt(g.visits?g.total*3/(g.visits*3):0,1)}</p></div>`;
-    $('#scoreSubmit').onclick=()=>{g.total+=Math.max(0,Math.min(180,+$('#scoreVisit').value||0));g.visits++;if(g.visits>=20){finishPractice();return;}renderPractice();};
+  if(g.mode==='checkout')return renderCheckoutTrainer();
+  if(g.mode==='121')return render121();
+  if(g.mode==='bobs27')return renderBobs27();
+}
+function renderCheckoutTrainer(){
+  const g=practice;
+  view.innerHTML=`<div class="section-title"><h2>${practiceName(g.mode)}</h2><span class="muted">Round ${g.round}</span></div><div class="card"><div class="target-big">${g.target}</div><div class="checkout"><strong>Route:</strong> ${(getCheckout(g.target,'double')||['No route']).join(' → ')}</div><p class="muted" style="text-align:center">Did you finish it within 3 darts?</p><div class="actions"><button class="btn primary big" data-pr="hit">Checkout ✓</button><button class="btn big" data-pr="miss">Miss</button></div><p class="game-status">${g.hits} checkouts from ${g.attempts} attempts</p></div>`;
+  $$('[data-pr]').forEach(b=>b.onclick=()=>{g.attempts++;if(b.dataset.pr==='hit')g.hits++;g.target=randomCheckout();g.round++;renderPractice();});
+}
+function practiceQuickPad(prefix,value,label='Enter visit score'){
+  return partyQuickPad(prefix,value,label);
+}
+function bindPracticeQuickPad(prefix,state,onSubmit){bindPartyQuickPad(prefix,state,onSubmit);}
+function render121(){
+  const g=practice,dartsLeft=(4-g.targetVisit)*3;
+  const routeNow=g.remaining<=170?(getCheckout(g.remaining,'double')||null):null;
+  const pending=g.checkoutPending?`<div class="checkout-confirm"><div class="checkout-confirm-icon">🎯</div><div><strong>Did that visit finish on a double?</strong><p>You entered <b>${g.checkoutPending.score}</b> from ${g.checkoutPending.from}. Quick scoring can keep the tally, but it cannot tell whether your last dart was a double.</p><div class="actions" style="justify-content:flex-start"><button class="btn primary" id="p121Yes">Yes — checkout ✓</button><button class="btn" id="p121No">No — bust</button></div></div></div>`:'';
+  const entry=g.checkoutPending?'':`<div class="card"><p class="muted" style="text-align:center">Enter the total scored with your next three darts. DartDeck keeps the running total for all three visits.</p>${practiceQuickPad('p121',g.quick,'Visit score')}</div>`;
+  view.innerHTML=`<div class="section-title"><h2>121</h2><span class="muted">Attempt ${g.round}</span></div><div class="training-score-grid"><div class="target-focus"><span>ATTEMPT TARGET</span><strong>${g.target}</strong></div><div class="target-focus"><span>REMAINING</span><strong>${g.remaining}</strong></div></div><div class="practice-progress"><strong>Visit ${g.targetVisit} of 3</strong><span>${dartsLeft} darts remaining</span></div>${routeNow?`<div class="checkout"><strong>Checkout:</strong> ${routeNow.join(' → ')}</div>`:`<div class="checkout"><strong>Setup:</strong> ${suggestSetup(g.remaining)}</div>`}${pending}${entry}<p class="game-status">${g.hits} successful checkouts from ${g.attempts} completed attempts</p>`;
+  if(g.checkoutPending){
+    $('#p121Yes').onclick=()=>complete121(true);
+    $('#p121No').onclick=()=>{g.checkoutPending=false;toast('Bust — score restored');advance121Visit();};
+  } else {
+    bindPracticeQuickPad('p121',g,n=>submit121Visit(n));
   }
+}
+function submit121Visit(n){
+  const g=practice,before=g.remaining;
+  g.quick='';
+  const left=before-n;
+  if(left<0||left===1){toast('Bust — score restored');advance121Visit();return;}
+  if(left===0){g.checkoutPending={from:before,score:n};render121();return;}
+  g.remaining=left;advance121Visit();
+}
+function advance121Visit(){
+  const g=practice;g.checkoutPending=false;g.quick='';
+  if(g.targetVisit<3){g.targetVisit++;render121();return;}
+  g.attempts++;g.round++;g.targetVisit=1;g.remaining=g.target;
+  toast(`${g.target} not finished in 9 darts — try it again`,2400);render121();
+}
+function complete121(success){
+  const g=practice;g.checkoutPending=false;g.quick='';
+  if(!success){advance121Visit();return;}
+  g.hits++;g.attempts++;const done=g.target;g.target++;g.remaining=g.target;g.round++;g.targetVisit=1;
+  toast(`Checked out ${done} — next target ${g.target}`,2200);render121();
+}
+function renderBobs27(){
+  const g=practice,targetLabel=g.target===21?'Bull':'D'+g.target,doubleValue=g.target===21?50:g.target*2;
+  view.innerHTML=`<div class="section-title"><h2>Bob's 27</h2><span class="muted">Score ${g.score}</span></div><div class="game-help"><strong>D1 → D20 → Bull</strong><span>Three darts at each double. Every hit adds the double’s value; miss all three and that value is subtracted. Reach zero or below and the game ends.</span></div><div class="training-score-grid"><div class="target-focus target-focus-large"><span>CURRENT TARGET · ${g.target} OF 21</span><strong>${targetLabel}</strong></div><div class="target-focus"><span>CURRENT SCORE</span><strong>${g.score}</strong></div></div><div class="card"><p class="muted" style="text-align:center">How many of your three darts hit <b>${targetLabel}</b>? ${targetLabel==='Bull'?'Each inner Bull hit is worth 50.':`Each hit is worth ${doubleValue}.`}</p><div class="hit-count-grid">${[0,1,2,3].map(n=>`<button class="${n?'primary':''}" data-bobhit="${n}"><strong>${n}</strong><span>${n===1?'hit':'hits'}</span></button>`).join('')}</div></div>`;
+  $$('[data-bobhit]').forEach(b=>b.onclick=()=>bob27Visit(+b.dataset.bobhit));
+}
+function bob27Visit(hits){
+  const g=practice,targetLabel=g.target===21?'Bull':'D'+g.target,doubleValue=g.target===21?50:g.target*2;
+  g.hits+=hits;g.attempts+=3;g.lastTarget=targetLabel;
+  g.score+=hits>0?doubleValue*hits:-doubleValue;
+  if(g.score<=0){g.busted=true;finishPractice();return;}
+  if(g.target===21){finishPractice();return;}
+  g.target++;renderBobs27();
 }
 async function finishPractice(){
   setGameplayActive(false);
-  const g=practice; let score=0,detail={};
-  if(g.mode==='bobs27'){score=g.score;detail={hits:g.hits,darts:g.attempts};}
-  if(g.mode==='doubles'){score=g.attempts?g.hits/g.attempts*100:0;detail={hits:g.hits,darts:g.attempts};}
-  if(g.mode==='scoring'){score=g.total/20;detail={total:g.total,visits:g.visits};}
+  const g=practice;
+  if(g.mode!=='bobs27'){route('practice-menu');return;}
+  const score=g.score,detail={hits:g.hits,darts:g.attempts,last_target:g.lastTarget,busted:g.busted};
   try{await api('/api/practice',{method:'POST',body:JSON.stringify({player_id:g.player.id,mode:g.mode,score,details_json:JSON.stringify(detail)})});}catch(e){}
-  view.innerHTML=`<div class="card"><div class="target-big">✓</div><h2 style="text-align:center">Session complete</h2><p style="text-align:center" class="muted">${g.mode==='bobs27'?`Final score: ${g.score}`:g.mode==='doubles'?`Double hit rate: ${fmt(score,1)}%`:`Average visit: ${fmt(score,1)}`}</p><div class="actions"><button class="btn primary" id="pracAgain">Again</button><button class="btn" id="pracHome">Home</button></div></div>`;
+  const title=g.busted?'Game over':'Bob’s 27 complete';
+  const detailText=g.busted?`You went out at ${g.lastTarget}. Final score: ${g.score}`:`You made it from D1 through Bull. Final score: ${g.score}`;
+  view.innerHTML=`<div class="card"><div class="target-big">${g.busted?'×':'✓'}</div><h2 style="text-align:center">${title}</h2><p style="text-align:center" class="muted">${detailText}</p><div class="actions"><button class="btn primary" id="pracAgain">Again</button><button class="btn" id="pracHome">Home</button></div></div>`;
   $('#pracAgain').onclick=()=>practiceSetup(g.mode);$('#pracHome').onclick=home;
 }
 

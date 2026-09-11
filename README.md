@@ -1,4 +1,4 @@
-# DartDeck v0.3.0
+# DartDeck v0.4.0
 
 A self-hosted darts scoring and practice PWA for Docker / Portainer.
 
@@ -14,8 +14,8 @@ A self-hosted darts scoring and practice PWA for Docker / Portainer.
 - Live 3-dart average, first-9 display, high visit, 100+/140+/180 counters
 - Saved players and X01 history in SQLite
 - Lifetime player stats
-- Party games: Cricket, Killer, Shanghai, Halve-It, Around the Clock, Count-Up
-- Training modes: Checkout Trainer, 121 (9 darts / 3 visits per target), Bob's 27, Doubles Around the Board, Scoring Trainer
+- Party games: Cricket, Killer, Shanghai, Halve-It
+- Training modes: Checkout Trainer, 121 (9 darts / 3 visits with quick-score tally), Bob's 27 (D1–D20 then Bull)
 - Custom theme colours and font choice
 - Uploadable app icon / favicon, automatically resized for the browser and PWA
 - Installable PWA manifest with 192px / 512px icons and iOS home-screen icon
@@ -135,5 +135,16 @@ Rebuilding or replacing the DartDeck container does not remove this data as long
 - A finishing visit in double-out/master-out also needs dart-by-dart input so the final dart can be validated. When a quick-score entry would finish the leg, DartDeck now keeps a persistent confirmation panel on screen while you enter the finishing darts.
 
 
-## Updating from v0.2.1
-This build renames Solo Practice to **Training**, removes the duplicate Solo X01 tile, changes **121** to allow 9 darts (3 visits) per target, and makes quick-score checkout confirmation persistent and explicit. Redeploy/rebuild the container, then reload DartDeck once. Existing data in the `dartdeck_data` volume is preserved.
+## Updating from v0.3.0
+v0.4.0 deliberately simplifies the app around the modes that benefit most from scoring support:
+
+- 121 now uses the quick-score keypad and keeps a live remaining total across all 9 darts.
+- Bob’s 27 runs D1 through D20 and then Bull, and ends if the score reaches zero or below.
+- Cricket has a conventional marks board, clearer rules and dart-by-dart target entry.
+- Killer uses a clearer doubles-based flow with visible **KILLER** badges and life markers.
+- Shanghai uses large Single / Double / Treble / Miss buttons and a prominent current-target block.
+- Halve-It uses the quick-score keypad.
+- Doubles Around the Board, Scoring Trainer, Around the Clock and Count-Up have been removed for now.
+- The screen wake lock still works when enabled, but the floating **Screen awake** badge has been removed.
+
+Redeploy/rebuild the container, then reload DartDeck once. Existing data in the `dartdeck_data` volume is preserved.

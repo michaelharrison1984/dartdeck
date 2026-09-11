@@ -97,11 +97,10 @@ th { color: var(--muted); font-size: .82rem; text-transform: uppercase; letter-s
 .status-dot { width:10px; height:10px; border-radius:999px; margin-top:5px; background:var(--muted); flex:0 0 auto; }
 .status-dot.ok { background:#8fca70; }
 .status-dot.bad { background:#e27f73; }
-.wake-badge { position:fixed; right:14px; bottom:14px; z-index:998; border:1px solid var(--line); background:var(--panel); color:var(--accent-2); padding:8px 11px; border-radius:999px; font-size:.82rem; box-shadow:0 8px 24px #0007; }
 .toggle-row { display:flex; align-items:center; justify-content:space-between; gap:15px; border:1px solid var(--line); border-radius:12px; padding:12px; }
 .toggle-row input { width:22px; height:22px; accent-color:var(--accent); }
 .install-nav { border-color:var(--accent)!important; }
-@media (max-width:700px){ .colour-grid{grid-template-columns:1fr;} .wake-badge{right:8px;bottom:8px;} }
+@media (max-width:700px){ .colour-grid{grid-template-columns:1fr;} }
 
 .checkout-confirm { margin: 0 0 16px; padding: 16px; display:flex; gap:12px; align-items:flex-start; background:color-mix(in srgb, var(--accent) 20%, var(--panel)); border:2px solid var(--accent); border-radius:14px; box-shadow:0 0 0 2px color-mix(in srgb, var(--accent) 14%, transparent); }
 .checkout-confirm-icon { font-size:1.8rem; line-height:1; }
@@ -109,3 +108,62 @@ th { color: var(--muted); font-size: .82rem; text-transform: uppercase; letter-s
 .checkout-confirm p { margin:6px 0 0; color:var(--text); line-height:1.45; }
 .practice-progress { display:flex; justify-content:center; gap:18px; flex-wrap:wrap; margin:0 auto 12px; padding:10px 14px; border:1px solid var(--line); border-radius:999px; width:fit-content; background:var(--panel-2); }
 .practice-progress span { color:var(--muted); }
+
+
+/* v0.4 game refinements */
+.game-help { display:flex; gap:12px; align-items:flex-start; margin:0 0 12px; padding:13px 15px; border:1px solid color-mix(in srgb, var(--accent) 38%, var(--line)); border-radius:14px; background:color-mix(in srgb, var(--accent) 9%, var(--panel)); line-height:1.45; }
+.game-help strong { flex:0 0 auto; color:var(--accent-2); }
+.game-help span { color:var(--muted); }
+.target-focus { display:grid; place-items:center; text-align:center; gap:3px; padding:14px; border:1px solid color-mix(in srgb, var(--accent) 42%, var(--line)); border-radius:16px; background:color-mix(in srgb, var(--accent) 10%, var(--panel)); }
+.target-focus span { color:var(--muted); font-size:.78rem; letter-spacing:.08em; font-weight:800; }
+.target-focus strong { font-size:clamp(2.1rem,8vw,4.6rem); line-height:1; }
+.target-focus-large { margin-bottom:12px; }
+.target-focus-large strong { font-size:clamp(4rem,18vw,8rem); }
+.current-turn { display:flex; justify-content:space-between; gap:12px; align-items:center; padding:10px 12px; border-radius:12px; background:var(--panel-2); }
+.current-turn span { color:var(--muted); }
+.quick-score-block { max-width:520px; margin:0 auto; }
+.quick-score-label { text-align:center; color:var(--muted); font-size:.9rem; margin-top:4px; }
+.cricket-table th,.cricket-table td { text-align:center; min-width:72px; }
+.cricket-table th:first-child { text-align:left; min-width:70px; }
+.cricket-mark { font-size:1.6rem; font-weight:900; }
+.cricket-dead { opacity:.48; }
+.table-score { margin-top:4px; font-size:.75rem; color:var(--accent-2); text-transform:none; letter-spacing:0; }
+.cricket-legend { display:flex; justify-content:center; flex-wrap:wrap; gap:14px; margin-top:12px; color:var(--muted); font-size:.85rem; }
+.cricket-mults { grid-template-columns:repeat(3,1fr); }
+.cricket-targets { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin-top:10px; }
+.cricket-targets button,.sdt-grid button,.hit-count-grid button { min-height:70px; border:1px solid var(--line); border-radius:13px; background:var(--panel-2); color:var(--text); font-weight:900; }
+.cricket-targets button:disabled { opacity:.28; cursor:not-allowed; }
+.cricket-targets button:hover:not(:disabled),.sdt-grid button:hover,.hit-count-grid button:hover { border-color:var(--accent); }
+.miss-button { border-color:color-mix(in srgb, var(--danger) 55%, var(--line))!important; }
+.killer-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:10px; margin-bottom:12px; }
+.killer-card { position:relative; padding:14px; border:1px solid var(--line); border-radius:16px; background:var(--panel); }
+.killer-card.active { border-color:var(--accent); box-shadow:inset 0 0 0 1px var(--accent); }
+.killer-card.eliminated { opacity:.42; }
+.killer-card-top { display:flex; justify-content:space-between; gap:8px; align-items:center; }
+.killer-badge { padding:5px 8px; border-radius:999px; border:1px solid var(--line); color:var(--muted); font-size:.7rem; font-weight:900; letter-spacing:.05em; }
+.killer-badge.on { background:var(--accent); color:#11180b; border-color:var(--accent); }
+.killer-number { font-size:2.8rem; font-weight:900; text-align:center; margin:10px 0 4px; }
+.killer-lives { text-align:center; letter-spacing:5px; font-size:1.5rem; color:color-mix(in srgb, var(--muted) 30%, transparent); }
+.killer-lives .live { color:#e06464; }
+.eliminated-label { text-align:center; font-weight:900; color:var(--danger); margin-top:5px; }
+.killer-attack-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:8px; }
+.killer-attack { min-height:68px; display:grid; gap:2px; place-items:center; }
+.killer-attack strong { font-size:1.5rem; }
+.killer-attack span { color:var(--muted); font-size:.82rem; }
+.sdt-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin-top:12px; }
+.sdt-grid button { display:grid; place-items:center; gap:4px; min-height:100px; }
+.sdt-grid button strong { font-size:2.1rem; }
+.sdt-grid button span { color:var(--muted); font-size:.8rem; }
+.training-score-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; margin-bottom:12px; }
+.hit-count-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; }
+.hit-count-grid button { min-height:90px; display:grid; place-items:center; gap:2px; }
+.hit-count-grid button.primary { background:var(--accent); color:#10150b; border-color:var(--accent); }
+.hit-count-grid button strong { font-size:2rem; }
+.hit-count-grid button span { font-size:.8rem; }
+@media (max-width:700px){
+  .game-help{display:grid;gap:5px;}
+  .cricket-targets{grid-template-columns:repeat(2,1fr);}
+  .sdt-grid{grid-template-columns:repeat(2,1fr);}
+  .training-score-grid{grid-template-columns:1fr 1fr;}
+  .hit-count-grid{grid-template-columns:repeat(2,1fr);}
+}
