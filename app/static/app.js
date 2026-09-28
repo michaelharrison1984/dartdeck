@@ -17,7 +17,7 @@ let deferredInstallPrompt = null;
 let wakeLock = null;
 let gameplayActive = false;
 let serviceWorkerReady = false;
-const APP_VERSION = '0.4.0';
+const APP_VERSION = '0.5.0';
 
 const FONT_STACKS = {
   modern:'Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif',
@@ -99,6 +99,30 @@ function esc(s='') { return String(s).replace(/[&<>"]/g, m=>({'&':'&amp;','<':'&
 function fmt(n,d=1){ return Number(n||0).toFixed(d); }
 
 async function loadPlayers(){ players = await api('/api/players'); }
+
+const LAST_GAME_PLAYERS_KEY='dartdeck-last-game-players';
+const LAST_TRAINING_PLAYER_KEY='dartdeck-last-training-player';
+function storedIds(key){
+  try{
+    const raw=JSON.parse(localStorage.getItem(key)||'[]');
+    const ids=(Array.isArray(raw)?raw:[raw]).map(Number).filter(Number.isFinite);
+    const valid=new Set(players.map(p=>p.id));
+    return ids.filter((id,i)=>valid.has(id)&&ids.indexOf(id)===i);
+  }catch(e){return [];}
+}
+function rememberGamePlayers(ids){
+  try{localStorage.setItem(LAST_GAME_PLAYERS_KEY,JSON.stringify(ids.map(Number)));}catch(e){}
+}
+function rememberTrainingPlayer(id){
+  try{localStorage.setItem(LAST_TRAINING_PLAYER_KEY,JSON.stringify([Number(id)]));}catch(e){}
+}
+function lastGamePlayerIds(){return storedIds(LAST_GAME_PLAYERS_KEY);}
+function lastTrainingPlayerId(){return storedIds(LAST_TRAINING_PLAYER_KEY)[0]||lastGamePlayerIds()[0]||players[0]?.id||null;}
+function preferredPlayerIds(count,current=[]){
+  const valid=new Set(players.map(p=>p.id));
+  const combined=[...current,...lastGamePlayerIds(),...players.map(p=>p.id)].map(Number);
+  return combined.filter((id,i)=>valid.has(id)&&combined.indexOf(id)===i).slice(0,count);
+}
 
 function home(){
   setGameplayActive(false);
@@ -229,10 +253,14 @@ async function x01Setup(){
   await loadPlayers();
   if(players.length===0){ view.innerHTML=`<div class="card"><h2>Add a player first</h2><p class="muted">Create at least one saved player before starting a match.</p><button class="btn primary" id="goPlayers">Players</button></div>`; $('#goPlayers').onclick=playerManager; return; }
   const opts=players.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('');
+  const maxPlayers=Math.min(4,players.length);
+  const remembered=lastGamePlayerIds();
+  const initialCount=Math.max(1,Math.min(maxPlayers,remembered.length||Math.min(2,maxPlayers)));
+  const playerCountOptions=Array.from({length:maxPlayers},(_,i)=>i+1).map(n=>`<option ${n===initialCount?'selected':''}>${n}</option>`).join('');
   view.innerHTML=`<div class="section-title"><h2>New X01 game</h2></div><div class="card">
     <div class="form-grid">
       <label>Starting score<select id="startScore"><option>301</option><option selected>501</option><option>701</option></select></label>
-      <label>Players<select id="playerCount"><option>1</option><option selected>2</option><option>3</option><option>4</option></select></label>
+      <label>Players<select id="playerCount">${playerCountOptions}</select></label>
       <label>In rule<select id="inRule"><option value="straight">Straight in</option><option value="double">Double in</option></select></label>
       <label>Out rule<select id="outRule"><option value="double" selected>Double out</option><option value="straight">Straight out</option><option value="master">Master out</option></select></label>
       <label>Legs<select id="legs"><option value="1">1 leg</option><option value="3" selected>Best of 3</option><option value="5">Best of 5</option><option value="7">Best of 7</option></select></label>
@@ -241,11 +269,18 @@ async function x01Setup(){
     <div id="playerSelects" class="form-grid" style="margin-top:14px"></div>
     <div class="actions"><button class="btn primary big" id="startX01">Start game</button></div>
   </div>`;
-  const renderSelects=()=>{const n=+$('#playerCount').value; $('#playerSelects').innerHTML=Array.from({length:n},(_,i)=>`<label>Player ${i+1}<select class="xplayer">${opts}</select></label>`).join(''); $$('.xplayer').forEach((s,i)=>s.selectedIndex=Math.min(i,players.length-1));};
+  const renderSelects=()=>{
+    const n=+$('#playerCount').value;
+    const current=$$('.xplayer').map(el=>+el.value).filter(Boolean);
+    const selected=preferredPlayerIds(n,current);
+    $('#playerSelects').innerHTML=Array.from({length:n},(_,i)=>`<label>Player ${i+1}<select class="xplayer">${opts}</select></label>`).join('');
+    $$('.xplayer').forEach((el,i)=>{if(selected[i])el.value=String(selected[i]);});
+  };
   renderSelects(); $('#playerCount').onchange=renderSelects;
   $('#inRule').onchange=()=>{ if($('#inRule').value==='double'){ $('#entryMode').value='darts'; $('#entryMode').disabled=true; toast('Double-in uses dart-by-dart entry'); } else $('#entryMode').disabled=false; };
   $('#startX01').onclick=()=>{
     const ids=$$('.xplayer').map(s=>+s.value); if(new Set(ids).size!==ids.length){toast('Choose different players');return;}
+    rememberGamePlayers(ids);
     startX01({start:+$('#startScore').value, ids, doubleIn:$('#inRule').value==='double', out:$('#outRule').value, bestOf:+$('#legs').value, mode:$('#entryMode').value});
   };
 }
@@ -290,7 +325,7 @@ function playerScoreCard(p,active,g){
   return `<div class="player-score ${active?'active':''}"><div class="name">${esc(p.name)} ${active?'●':''}</div><div class="score">${p.score}</div><div class="meta"><span>AVG ${fmt(avg,1)}</span><span>F9 ${fmt(f9,1)}</span></div><div class="meta"><span>Legs ${p.legs}</span><span>High ${p.highestVisit}</span></div></div>`;
 }
 function quickInput(){
-  return `<div class="quick-total" id="quickTotal">${x01.quick||'—'}</div><div class="keypad">${[1,2,3,4,5,6,7,8,9,'C',0,'⌫'].map(k=>`<button data-key="${k}">${k}</button>`).join('')}</div><div class="actions"><button class="btn primary big" id="submitQuick">Submit visit</button></div>`;
+  return `<div class="quick-total" id="quickTotal">${x01.quick||'—'}</div><div class="keypad">${[1,2,3,4,5,6,7,8,9,'C',0,'⌫'].map(k=>`<button data-key="${k}">${k}</button>`).join('')}</div><div class="actions"><button class="btn big" id="missQuick">Miss</button><button class="btn primary big" id="submitQuick">Submit visit</button></div>`;
 }
 function dartInput(){
   const labels=x01.visit.map(d=>d.label).join(' ')||'No darts entered';
@@ -309,6 +344,7 @@ function bindX01(){
   $('#undo').onclick=undoX01; $('#endGame').onclick=()=>{if(confirm('End this game without saving?')) route('home')};
   if(x01.mode==='quick'){
     $$('[data-key]').forEach(b=>b.onclick=()=>{const k=b.dataset.key;if(k==='C')x01.quick='';else if(k==='⌫')x01.quick=x01.quick.slice(0,-1);else if(x01.quick.length<3)x01.quick+=k; $('#quickTotal').textContent=x01.quick||'—';});
+    $('#missQuick').onclick=()=>{x01.quick='';commitVisit({score:0,darts:3,finishDarts:null,labels:['Miss'],dartObjs:null});};
     $('#submitQuick').onclick=()=>{
       const n=+x01.quick;
       if(x01.quick===''||n<0||n>180){toast('Enter a score from 0 to 180');return;}
@@ -323,7 +359,13 @@ function bindX01(){
     $$('[data-m]').forEach(b=>b.onclick=()=>{const m=+b.dataset.m;if(m===0){addDart(0,0);return;}x01.mult=m;renderX01();});
     $$('[data-seg]').forEach(b=>b.onclick=()=>addDart(+b.dataset.seg,x01.mult));
     $('#clearDarts').onclick=()=>{x01.visit=[];renderX01();};
-    $('#submitDarts').onclick=()=>{if(!x01.visit.length){toast('Enter at least one dart');return;} const score=x01.visit.reduce((a,d)=>a+d.score,0); x01.checkoutPending=null; commitVisit({score,darts:x01.visit.length,finishDarts:x01.visit.length,labels:x01.visit.map(d=>d.label),dartObjs:[...x01.visit]});};
+    $('#submitDarts').onclick=()=>{
+      if(!x01.visit.length){toast('Enter at least one dart');return;}
+      const score=x01.visit.reduce((a,d)=>a+d.score,0);
+      const returnToQuick=!!x01.checkoutPending;
+      x01.checkoutPending=null;
+      commitVisit({score,darts:x01.visit.length,finishDarts:x01.visit.length,labels:x01.visit.map(d=>d.label),dartObjs:[...x01.visit],returnToQuick});
+    };
   }
 }
 function addDart(seg,m){
@@ -371,9 +413,11 @@ function commitVisit(v){
   p.highestVisit=Math.max(p.highestVisit,scored); if(scored===180)p.c180++; if(scored>=140)p.c140++; if(scored>=100)p.c100++;
   p.visits.push(scored);
   if(finish){checkoutValue=before;p.checkouts++;p.highestCheckout=Math.max(p.highestCheckout,checkoutValue);p.legs++; toast(`${p.name} wins the leg!`,2400); const needed=Math.floor(g.bestOf/2)+1; if(p.legs>=needed){finishMatch(p);return;} startNextLeg();return;}
-  g.turn=(g.turn+1)%g.players.length; g.quick=''; g.visit=[]; g.checkoutPending=null; renderX01();
+  g.turn=(g.turn+1)%g.players.length;
+  if(v.returnToQuick) g.mode=(g.doubleIn&&!g.players[g.turn].in)?'darts':'quick';
+  g.quick=''; g.visit=[]; g.checkoutPending=null; renderX01();
 }
-function startNextLeg(){const g=x01;g.legNo++;g.turn=(g.legNo-1)%g.players.length;g.players.forEach(p=>{p.score=g.start;p.in=false;p.first9Points=0;p.first9Darts=0;});g.quick='';g.visit=[];g.checkoutPending=null;renderX01();}
+function startNextLeg(){const g=x01;g.legNo++;g.turn=(g.legNo-1)%g.players.length;g.players.forEach(p=>{p.score=g.start;p.in=false;p.first9Points=0;p.first9Darts=0;});g.mode=g.doubleIn?'darts':'quick';g.quick='';g.visit=[];g.checkoutPending=null;renderX01();}
 async function finishMatch(winner){
   setGameplayActive(false);
   const g=x01; g.finished=true;
@@ -394,13 +438,29 @@ const dartsByScore = (()=>{
   for(const list of m.values())list.sort((a,b)=>rankDart(b)-rankDart(a));
   return m;
 })();
+function routeQuality(route){
+  const finishPreference={D20:100,D16:90,D8:86,D12:84,D18:82,D10:80,D14:76,D6:68,D4:64,D2:60,D1:56,Bull:70};
+  const last=route[route.length-1];
+  let q=finishPreference[last.label]||0;
+  route.slice(0,-1).forEach((d,i)=>{
+    if(d.kind==='T') q+=40+d.score;
+    else if(d.kind==='S') q+=15+d.score;
+    else if(d.kind==='D') q+=d.score-30; // save doubles for the finishing dart where possible
+    if(d.label==='25')q-=50;
+    if(d.label==='Bull')q-=40;
+    if(i===0&&d.kind==='T')q+=30;
+  });
+  // On the second dart of a three-dart checkout, favour an easy single adjustment
+  // over a mathematically equivalent small treble/double (e.g. 112: T20, 12, D20).
+  if(route.length===3&&route[1]?.kind==='S')q+=80;
+  if(route.length===2&&route[0]?.kind==='S')q+=80;
+  return q;
+}
 function bestSolution(solutions){
   if(!solutions.length)return null;
-  const prefDouble=['D20','D16','D18','D12','D10','D8','D4','Bull'];
   solutions.sort((x,y)=>{
-    const fx=prefDouble.indexOf(x[x.length-1].label), fy=prefDouble.indexOf(y[y.length-1].label);
-    const ax=(fx<0?99:fx), ay=(fy<0?99:fy); if(ax!==ay)return ax-ay;
-    return y.reduce((s,d)=>s+rankDart(d),0)-x.reduce((s,d)=>s+rankDart(d),0);
+    if(x.length!==y.length)return x.length-y.length; // prefer a finish in fewer darts
+    return routeQuality(y)-routeQuality(x);
   });
   return solutions[0];
 }
@@ -456,7 +516,9 @@ async function partySetup(type){
   const minPlayers=(type==='cricket'||type==='killer')?2:1;
   if(players.length<minPlayers){toast(`${partyName(type)} needs at least ${minPlayers} players`);route('players');return;}
   const maxPlayers=Math.min(4,players.length);
-  const defaultPlayers=Math.min(type==='killer'?3:2,maxPlayers);
+  const remembered=lastGamePlayerIds();
+  const fallbackPlayers=Math.min(type==='killer'?3:2,maxPlayers);
+  const defaultPlayers=remembered.length>=minPlayers?Math.min(remembered.length,maxPlayers):fallbackPlayers;
   const countOptions=Array.from({length:maxPlayers-minPlayers+1},(_,i)=>i+minPlayers).map(n=>`<option ${n===defaultPlayers?'selected':''}>${n}</option>`).join('');
   const extra=type==='killer'?`<label>Starting lives<select id="rounds"><option>2</option><option selected>3</option><option>4</option><option>5</option></select></label>`:'';
   const setupHelp={
@@ -469,8 +531,10 @@ async function partySetup(type){
   const numOpts=Array.from({length:20},(_,i)=>`<option value="${i+1}">${i+1}</option>`).join('');
   const rs=()=>{
     const n=+$('#pc').value;
+    const current=$$('.pp').map(el=>+el.value).filter(Boolean);
+    const selected=preferredPlayerIds(n,current);
     $('#ps').innerHTML=Array.from({length:n},(_,i)=>`<label>Player ${i+1}<select class="pp">${opts}</select></label>${type==='killer'?`<label>${i===0?'Killer numbers':'Number'}<select class="knum">${numOpts}</select></label>`:''}`).join('');
-    $$('.pp').forEach((el,i)=>el.selectedIndex=Math.min(i,players.length-1));
+    $$('.pp').forEach((el,i)=>{if(selected[i])el.value=String(selected[i]);});
     $$('.knum').forEach((el,i)=>el.value=String(i+1));
   };
   rs(); $('#pc').onchange=rs;
@@ -480,6 +544,7 @@ async function partySetup(type){
     const nums=type==='killer'?$$('.knum').map(el=>+el.value):[];
     if(type==='killer'&&new Set(nums).size!==nums.length){toast('Each Killer player needs a different number');return;}
     const rounds=type==='killer'?+$('#rounds').value:(type==='shanghai'||type==='halveit'?7:0);
+    rememberGamePlayers(ids);
     startParty(type,ids,rounds,nums);
   };
 }
@@ -639,7 +704,8 @@ async function practiceSetup(mode){
   setGameplayActive(false);
   await loadPlayers(); if(!players.length){route('players');return;}
   view.innerHTML=`<div class="section-title"><h2>${practiceName(mode)}</h2></div><div class="card"><div class="form-grid"><label>Player<select id="pracPlayer">${players.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select></label></div><div class="actions"><button class="btn primary big" id="startPractice">Start</button></div></div>`;
-  $('#startPractice').onclick=()=>startPractice(mode,+$('#pracPlayer').value);
+  const remembered=lastTrainingPlayerId(); if(remembered)$('#pracPlayer').value=String(remembered);
+  $('#startPractice').onclick=()=>{const id=+$('#pracPlayer').value;rememberTrainingPlayer(id);startPractice(mode,id);};
 }
 function practiceName(m){return ({checkout:'Checkout Trainer','121':'121',bobs27:"Bob's 27"})[m]}
 function startPractice(mode,playerId){

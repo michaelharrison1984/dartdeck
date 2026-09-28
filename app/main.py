@@ -34,7 +34,7 @@ DEFAULT_SETTINGS = {
 ALLOWED_FONTS = {"modern", "system", "rounded", "condensed", "classic", "mono"}
 HEX_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 
-app = FastAPI(title="DartDeck", version="0.3.0")
+app = FastAPI(title="DartDeck", version="0.5.0")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 

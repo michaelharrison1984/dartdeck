@@ -1,4 +1,4 @@
-# DartDeck v0.4.0
+# DartDeck v0.5.0
 
 A self-hosted darts scoring and practice PWA for Docker / Portainer.
 
@@ -135,8 +135,15 @@ Rebuilding or replacing the DartDeck container does not remove this data as long
 - A finishing visit in double-out/master-out also needs dart-by-dart input so the final dart can be validated. When a quick-score entry would finish the leg, DartDeck now keeps a persistent confirmation panel on screen while you enter the finishing darts.
 
 
-## Updating from v0.3.0
-v0.4.0 deliberately simplifies the app around the modes that benefit most from scoring support:
+## Updating from v0.4.0
+v0.5.0 keeps the focused game list from v0.4.0 and adds real-play refinements:
+
+- X01 checkout confirmation returns automatically to Quick Score.
+- All multiplayer game setup screens remember the last-used players and order; Training remembers its last player.
+- Checkout routing favours safer single setup darts instead of unnecessary intermediate doubles (for example 112 = T20 → 12 → D20).
+- X01 Quick Score has a one-tap Miss button for a 0-point visit.
+
+The retained game set remains:
 
 - 121 now uses the quick-score keypad and keeps a live remaining total across all 9 darts.
 - Bob’s 27 runs D1 through D20 and then Bull, and ends if the score reaches zero or below.
