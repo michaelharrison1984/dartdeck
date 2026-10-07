@@ -17,7 +17,7 @@ let deferredInstallPrompt = null;
 let wakeLock = null;
 let gameplayActive = false;
 let serviceWorkerReady = false;
-const APP_VERSION = '0.5.0';
+const APP_VERSION = '0.6.1';
 
 const FONT_STACKS = {
   modern:'Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif',
@@ -131,7 +131,7 @@ function home(){
       ${homeCard('🎯','Quick Game','301, 501 or 701 for up to four players.','x01-setup')}
       ${homeCard('👥','Party Games','Cricket, Killer, Shanghai and Halve-It.','party-menu')}
       ${homeCard('🏋️','Training','Checkout practice, 121 and Bob’s 27.','practice-menu')}
-      ${homeCard('📊','Stats','Lifetime averages, 180s and checkout data.','stats')}
+      ${homeCard('📊','Stats','Leaderboards, badges, averages, 180s and checkout data.','stats')}
     </div>
     <div class="section-title"><h2>Designed for the oche</h2></div>
     <div class="card"><p class="muted">Large touch targets, fast score entry, undo support, checkout routes and installable PWA support. Your players and match history are stored in the Docker volume.</p></div>`;
@@ -155,12 +155,60 @@ async function playerManager(){
   $$('[data-del]').forEach(b=>b.onclick=async()=>{try{await api('/api/players/'+b.dataset.del,{method:'DELETE'});await playerManager()}catch(e){toast(e.message,2500)}});
 }
 
+function leaderboardCard(icon,title,rows,unit){
+  const medals=['🥇','🥈','🥉'];
+  const visible=(rows||[]).slice(0,5);
+  const body=visible.length?visible.map((r,i)=>`<div class="leader-row"><span class="leader-rank">${medals[i]||i+1}</span><strong>${esc(r.name)}</strong><span>${Number(r.value).toLocaleString()} ${unit}</span></div>`).join(''):'<div class="muted">No results yet.</div>';
+  return `<div class="card leaderboard-card"><h3>${icon} ${title}</h3>${body}</div>`;
+}
+function buildBadgeAwards(rows,boards){
+  const awards=new Map();
+  const add=(id,b)=>{if(!awards.has(+id))awards.set(+id,[]);awards.get(+id).push(b);};
+  const awardMax=(eligible,valueFn,badgeFn)=>{
+    if(!eligible.length)return;
+    const max=Math.max(...eligible.map(valueFn)); if(!(max>0))return;
+    eligible.filter(r=>valueFn(r)===max).forEach(r=>add(r.id,badgeFn(max)));
+  };
+  awardMax(rows,r=>+r.total_180s,v=>({icon:'💥',label:'Maximum Machine',detail:`Most 180s · ${v}`}));
+  awardMax(rows,r=>+r.highest_checkout,v=>({icon:'🎯',label:'Checkout King',detail:`Highest checkout · ${v}`}));
+  const coEligible=rows.filter(r=>+r.checkout_attempts>=10);
+  awardMax(coEligible,r=>Math.round((+r.checkouts/+r.checkout_attempts)*10000)/100,v=>({icon:'🧊',label:'Ice Cold',detail:`Best checkout rate · ${fmt(v,1)}% (10+ attempts)`}));
+  const boardBadges={
+    shanghai:{icon:'🌏',label:'Shanghai Star',suffix:'pts'},
+    halveit:{icon:'✂️',label:'Halve-It Hero',suffix:'pts'},
+    bobs27:{icon:'🎯',label:"Bob's 27 Boss",suffix:'pts'},
+    cricket_wins:{icon:'🏏',label:'Cricket Captain',suffix:'wins'},
+    killer_wins:{icon:'👑',label:'Killer King',suffix:'wins'}
+  };
+  Object.entries(boardBadges).forEach(([key,b])=>{
+    const list=boards[key]||[]; if(!list.length||!(+list[0].value>0))return;
+    const top=+list[0].value;
+    list.filter(r=>+r.value===top).forEach(r=>add(r.player_id,{icon:b.icon,label:b.label,detail:`${top} ${b.suffix}`}));
+  });
+  return awards;
+}
+function badgeChips(items=[]){return items.map(b=>`<span class="award-badge" title="${esc(b.detail)}"><span>${b.icon}</span>${esc(b.label)}</span>`).join('');}
+
 async function statsView(){
   setGameplayActive(false);
-  const rows=await api('/api/stats');
-  view.innerHTML=`<div class="section-title"><h2>Player stats</h2><span class="muted">Recorded X01 history</span></div><div class="card table-wrap"><table>
-  <thead><tr><th>Player</th><th>Matches</th><th>Legs</th><th>Avg</th><th>Best Avg</th><th>High CO</th><th>High Visit</th><th>180s</th><th>CO%</th></tr></thead>
-  <tbody>${rows.map(r=>`<tr><td><strong>${esc(r.name)}</strong></td><td>${r.matches}</td><td>${r.legs_won}</td><td>${fmt(r.lifetime_average,2)}</td><td>${fmt(r.best_average,2)}</td><td>${r.highest_checkout}</td><td>${r.highest_visit}</td><td>${r.total_180s}</td><td>${r.checkout_attempts?fmt(r.checkouts/r.checkout_attempts*100,0)+'%':'—'}</td></tr>`).join('') || '<tr><td colspan="9" class="muted">No stats recorded yet.</td></tr>'}</tbody></table></div>`;
+  await loadPlayers();
+  const [rows,boards]=await Promise.all([api('/api/stats'),api('/api/leaderboards')]);
+  const awards=buildBadgeAwards(rows,boards);
+  const honours=players.map(p=>({p,b:awards.get(+p.id)||[]})).filter(x=>x.b.length);
+  view.innerHTML=`
+    <div class="section-title"><h2>Honours & leaderboards</h2><span class="muted">Current leaders keep the badge until somebody beats them</span></div>
+    ${honours.length?`<div class="honours-grid">${honours.map(x=>`<div class="card honour-card"><h3>${esc(x.p.name)}</h3><div class="badge-wrap">${badgeChips(x.b)}</div></div>`).join('')}</div>`:`<div class="card"><p class="muted">Play some recorded games to start earning DartDeck badges.</p></div>`}
+    <div class="section-title"><h2>Game leaderboards</h2><span class="muted">Best recorded results</span></div>
+    <div class="leaderboard-grid">
+      ${leaderboardCard('🌏','Shanghai',boards.shanghai,'pts')}
+      ${leaderboardCard('✂️','Halve-It',boards.halveit,'pts')}
+      ${leaderboardCard('🎯',"Bob's 27",boards.bobs27,'pts')}
+      ${leaderboardCard('🏏','Cricket',boards.cricket_wins,'wins')}
+      ${leaderboardCard('👑','Killer',boards.killer_wins,'wins')}
+    </div>
+    <div class="section-title"><h2>X01 player stats</h2><span class="muted">Recorded X01 history</span></div><div class="card table-wrap"><table>
+    <thead><tr><th>Player</th><th>Matches</th><th>Legs</th><th>Avg</th><th>Best Avg</th><th>High CO</th><th>High Visit</th><th>180s</th><th>CO%</th></tr></thead>
+    <tbody>${rows.map(r=>`<tr><td><strong>${esc(r.name)}</strong>${awards.get(+r.id)?.length?`<div class="table-badges">${awards.get(+r.id).map(b=>`<span title="${esc(b.detail)}">${b.icon}</span>`).join('')}</div>`:''}</td><td>${r.matches}</td><td>${r.legs_won}</td><td>${fmt(r.lifetime_average,2)}</td><td>${fmt(r.best_average,2)}</td><td>${r.highest_checkout}</td><td>${r.highest_visit}</td><td>${r.total_180s}</td><td>${r.checkout_attempts?fmt(r.checkouts/r.checkout_attempts*100,0)+'%':'—'}</td></tr>`).join('') || '<tr><td colspan="9" class="muted">No stats recorded yet.</td></tr>'}</tbody></table></div>`;
 }
 
 async function settingsView(){
@@ -289,19 +337,25 @@ function basePlayer(p,start){return {id:p.id,name:p.name,score:start,legs:0,in:f
 function startX01(cfg){
   setGameplayActive(true);
   const selected=cfg.ids.map(id=>players.find(p=>p.id===id));
-  x01={...cfg, players:selected.map(p=>basePlayer(p,cfg.start)), turn:0, visit:[], mult:1, quick:'', history:[], finished:false, legNo:1, checkoutPending:null};
+  x01={...cfg, players:selected.map(p=>basePlayer(p,cfg.start)), turn:0, visit:[], mult:1, quick:'', history:[], finished:false, legNo:1, checkoutPending:null,checkoutFallback:false};
   renderX01();
 }
 
 function renderX01(){
   const g=x01, active=g.players[g.turn];
   const route=getCheckout(active.score,g.out);
+  const checkoutRoute=g.checkoutPending ? getCheckout(g.checkoutPending.from,g.out) : null;
+  const minCheckoutDarts=checkoutRoute ? checkoutRoute.length : 1;
   const checkoutConfirm=g.checkoutPending ? `
-    <div class="checkout-confirm" role="status">
+    <div class="checkout-confirm checkout-count" role="status">
       <div class="checkout-confirm-icon">🎯</div>
-      <div>
-        <strong>Confirm the checkout dart-by-dart</strong>
-        <p>You entered <b>${g.checkoutPending.score}</b> to finish <b>${g.checkoutPending.from}</b>. Enter the actual finishing darts below, then tap <b>Confirm checkout</b>. This message will stay here until you finish or return to quick scoring.</p>
+      <div class="checkout-confirm-body">
+        <strong>Number of darts?</strong>
+        <p>You entered <b>${g.checkoutPending.score}</b> to finish <b>${g.checkoutPending.from}</b>. How many darts did the checkout take?</p>
+        <div class="actions checkout-dart-actions">
+          ${[1,2,3].map(n=>`<button class="btn ${n===minCheckoutDarts?'primary':''} big" data-checkout-darts="${n}" ${n<minCheckoutDarts?'disabled':''}>${n} ${n===1?'dart':'darts'}</button>`).join('')}
+        </div>
+        <p class="muted small-note">DartDeck will use this for your average and checkout stats. You only need dart-by-dart entry if you want to record the exact route.</p>
       </div>
     </div>` : '';
   view.innerHTML=`
@@ -311,9 +365,9 @@ function renderX01(){
   <div class="card">
     ${checkoutConfirm}
     <div class="game-status">${esc(active.name)} to throw ${g.doubleIn&&!active.in?'· needs a double to get in':''}</div>
-    ${g.mode==='quick'?quickInput():dartInput()}
+    ${g.checkoutPending?'':(g.mode==='quick'?quickInput():dartInput())}
     <div class="actions">
-      <button class="btn" id="switchInput">${g.checkoutPending?'Back to quick score':g.mode==='quick'?'Dart-by-dart':'Quick score'}</button>
+      <button class="btn" id="switchInput">${g.checkoutPending?'Enter dart-by-dart instead':g.mode==='quick'?'Dart-by-dart':'Quick score'}</button>
       <button class="btn" id="undo">Undo last visit</button>
       <button class="btn danger" id="endGame">End game</button>
     </div>
@@ -335,9 +389,16 @@ function dartInput(){
   <div class="actions"><button class="btn" id="clearDarts">Clear darts</button><button class="btn primary big" id="submitDarts">${x01.checkoutPending?'Confirm checkout':'Submit visit'}</button></div>`;
 }
 function bindX01(){
+  $$('[data-checkout-darts]').forEach(b=>b.onclick=()=>{
+    const pending=x01.checkoutPending;
+    if(!pending)return;
+    const darts=+b.dataset.checkoutDarts;
+    x01.checkoutPending=null;
+    commitVisit({score:pending.score,darts,finishDarts:darts,labels:[`Checkout ${pending.score} (${darts} ${darts===1?'dart':'darts'})`],dartObjs:null,checkoutConfirmed:true,returnToQuick:true});
+  });
   $('#switchInput').onclick=()=>{
     const p=x01.players[x01.turn];
-    if(x01.checkoutPending){x01.checkoutPending=null;x01.mode='quick';x01.quick='';x01.visit=[];renderX01();return;}
+    if(x01.checkoutPending){x01.checkoutPending=null;x01.checkoutFallback=true;x01.mode='darts';x01.quick='';x01.visit=[];renderX01();return;}
     if(x01.doubleIn && !p.in && x01.mode==='darts'){toast('Stay in dart-by-dart mode until this player is in');return;}
     x01.mode=x01.mode==='quick'?'darts':'quick'; x01.quick=''; x01.visit=[]; renderX01();
   };
@@ -349,9 +410,11 @@ function bindX01(){
       const n=+x01.quick;
       if(x01.quick===''||n<0||n>180){toast('Enter a score from 0 to 180');return;}
       const p=x01.players[x01.turn];
-      if(x01.out!=='straight' && n===p.score){
+      if(n===p.score){
+        const route=getCheckout(p.score,x01.out);
+        if(!route){toast(`No valid ${x01.out==='double'?'double-out':x01.out==='master'?'master-out':'checkout'} from ${p.score}`);return;}
         x01.checkoutPending={score:n,from:p.score};
-        x01.mode='darts';x01.quick='';x01.visit=[];renderX01();return;
+        x01.quick='';x01.visit=[];renderX01();return;
       }
       commitVisit({score:n,darts:3,finishDarts:null,labels:[String(n)],dartObjs:null});
     };
@@ -362,8 +425,8 @@ function bindX01(){
     $('#submitDarts').onclick=()=>{
       if(!x01.visit.length){toast('Enter at least one dart');return;}
       const score=x01.visit.reduce((a,d)=>a+d.score,0);
-      const returnToQuick=!!x01.checkoutPending;
-      x01.checkoutPending=null;
+      const returnToQuick=!!x01.checkoutPending||!!x01.checkoutFallback;
+      x01.checkoutPending=null;x01.checkoutFallback=false;
       commitVisit({score,darts:x01.visit.length,finishDarts:x01.visit.length,labels:x01.visit.map(d=>d.label),dartObjs:[...x01.visit],returnToQuick});
     };
   }
@@ -377,7 +440,7 @@ function addDart(seg,m){
   x01.visit.push({seg,m,score,label,isDouble,isTriple}); renderX01();
 }
 function snapshot(){return JSON.stringify({players:x01.players,turn:x01.turn,legNo:x01.legNo});}
-function undoX01(){if(!x01.history.length){toast('Nothing to undo');return;}const s=JSON.parse(x01.history.pop());x01.players=s.players;x01.turn=s.turn;x01.legNo=s.legNo;x01.quick='';x01.visit=[];x01.checkoutPending=null;renderX01();}
+function undoX01(){if(!x01.history.length){toast('Nothing to undo');return;}const s=JSON.parse(x01.history.pop());x01.players=s.players;x01.turn=s.turn;x01.legNo=s.legNo;x01.quick='';x01.visit=[];x01.checkoutPending=null;x01.checkoutFallback=false;renderX01();}
 
 function commitVisit(v){
   const g=x01, p=g.players[g.turn], before=p.score; g.history.push(snapshot());
@@ -393,9 +456,13 @@ function commitVisit(v){
     if(remaining<0) bust=true;
     if(g.out==='double' && remaining===1) bust=true;
     if(remaining===0){
-      if(g.out==='straight') finish=true;
+      if(v.checkoutConfirmed) finish=true;
+      else if(g.out==='straight') finish=true;
       else if(!dartObjs){
-        g.history.pop(); g.checkoutPending={score:v.score,from:before}; g.mode='darts'; g.quick=''; g.visit=[]; renderX01(); return;
+        if(getCheckout(before,g.out)){
+          g.history.pop(); g.checkoutPending={score:v.score,from:before}; g.quick=''; g.visit=[]; renderX01(); return;
+        }
+        bust=true;
       }
       else {
         const last=dartObjs[dartObjs.length-1];
@@ -404,7 +471,7 @@ function commitVisit(v){
       }
     }
   }
-  const wasCheckoutRange = before<=170 && !!getCheckout(before,g.out);
+  const wasCheckoutRange = !!getCheckout(before,g.out);
   if(wasCheckoutRange) p.attempts++;
   if(bust){scored=0; p.score=before; toast('Bust');}
   else {p.score=remaining;}
@@ -417,7 +484,7 @@ function commitVisit(v){
   if(v.returnToQuick) g.mode=(g.doubleIn&&!g.players[g.turn].in)?'darts':'quick';
   g.quick=''; g.visit=[]; g.checkoutPending=null; renderX01();
 }
-function startNextLeg(){const g=x01;g.legNo++;g.turn=(g.legNo-1)%g.players.length;g.players.forEach(p=>{p.score=g.start;p.in=false;p.first9Points=0;p.first9Darts=0;});g.mode=g.doubleIn?'darts':'quick';g.quick='';g.visit=[];g.checkoutPending=null;renderX01();}
+function startNextLeg(){const g=x01;g.legNo++;g.turn=(g.legNo-1)%g.players.length;g.players.forEach(p=>{p.score=g.start;p.in=false;p.first9Points=0;p.first9Darts=0;});g.mode=g.doubleIn?'darts':'quick';g.quick='';g.visit=[];g.checkoutPending=null;g.checkoutFallback=false;renderX01();}
 async function finishMatch(winner){
   setGameplayActive(false);
   const g=x01; g.finished=true;
@@ -589,10 +656,44 @@ function advanceRoundGame(){
   }
   renderParty();
 }
-function partyWinner(p,extra=''){
+async function savePartyMatch(winner){
+  const g=party;
+  const ordered=[...g.players].sort((a,b)=>{
+    if(g.type==='killer')return (b.lives||0)-(a.lives||0);
+    return (b.score||0)-(a.score||0);
+  });
+  const position=new Map(ordered.map((x,i)=>[x.id,i+1]));
+  const payload={
+    game_type:g.type,
+    start_score:null,
+    winner_player_id:winner.id,
+    settings_json:JSON.stringify({rounds:g.rounds}),
+    players:g.players.map(x=>({
+      player_id:x.id,
+      finishing_position:position.get(x.id)||null,
+      points_scored:+x.score||0
+    }))
+  };
+  return api('/api/matches',{method:'POST',body:JSON.stringify(payload)});
+}
+function finishScoreTable(g){
+  if(g.type==='killer')return `<div class="card table-wrap"><table><thead><tr><th>Player</th><th>Status</th><th>Lives</th></tr></thead><tbody>${g.players.map(x=>`<tr><td><strong>${esc(x.name)}</strong></td><td>${x.lives>0?'Winner':'Out'}</td><td>${x.lives}</td></tr>`).join('')}</tbody></table></div>`;
+  return `<div class="card table-wrap"><table><thead><tr><th>Player</th><th>Final score</th></tr></thead><tbody>${[...g.players].sort((a,b)=>b.score-a.score).map(x=>`<tr><td><strong>${esc(x.name)}</strong></td><td>${x.score}</td></tr>`).join('')}</tbody></table></div>`;
+}
+function partyRecordKey(type){return type==='shanghai'?'shanghai':type==='halveit'?'halveit':null;}
+async function partyWinner(p,extra=''){
+  const g=party;
+  if(g.finished)return;
+  g.finished=true;
   setGameplayActive(false);
-  view.innerHTML=`<div class="card"><div class="target-big">🏆</div><h2 style="text-align:center">${esc(p.name)} wins!</h2><p class="muted" style="text-align:center">${extra}</p><div class="actions"><button class="btn primary" id="againP">Play again</button><button class="btn" id="homeP">Home</button></div></div>`;
-  $('#againP').onclick=()=>partySetup(party.type);$('#homeP').onclick=home;
+  try{await savePartyMatch(p);}catch(e){toast('Game finished, but the result could not be saved',2800);}
+  let boards={};
+  try{boards=await api('/api/leaderboards');}catch(e){}
+  const key=partyRecordKey(g.type),record=key?(boards[key]||[])[0]:null;
+  const recordHtml=record?`<div class="record-strip"><span>🏆 ${partyName(g.type)} high score</span><strong>${esc(record.name)} · ${Number(record.value).toLocaleString()}</strong></div>`:'';
+  const scores=['cricket','shanghai','halveit','killer'].includes(g.type)?finishScoreTable(g):'';
+  view.innerHTML=`<div class="card result-hero"><div class="target-big">🏆</div><h2>${esc(p.name)} wins!</h2>${extra?`<p class="muted">${extra}</p>`:''}${recordHtml}</div>${scores}<div class="actions"><button class="btn primary" id="againP">Play again</button><button class="btn" id="homeP">Home</button></div>`;
+  $('#againP').onclick=()=>partySetup(g.type);$('#homeP').onclick=home;
 }
 
 function renderCricket(){
@@ -602,10 +703,10 @@ function renderCricket(){
     const dead=g.players.every(x=>x.marks[seg]>=3);
     return `<tr class="${dead?'cricket-dead':''}"><th>${seg===25?'Bull':seg}</th>${g.players.map(x=>`<td class="cricket-mark">${cricketMarks(x.marks[seg])}</td>`).join('')}</tr>`;
   }).join('');
-  view.innerHTML=`<div class="section-title"><h2>Cricket</h2><span class="muted">${esc(p.name)} · dart ${g.darts+1}/3</span></div>
-  <div class="game-help"><strong>How to win</strong><span>Close 20, 19, 18, 17, 16, 15 and Bull with 3 marks each. Single = 1 mark, Double = 2, Treble = 3. Once you close a target, extra marks score points until every opponent closes it. Close everything while level or ahead on points to win.</span></div>
-  <div class="card table-wrap"><table class="cricket-table"><thead><tr><th>Target</th>${g.players.map((x,i)=>`<th>${esc(x.name)}${i===g.turn?' ●':''}<div class="table-score">${x.score} pts</div></th>`).join('')}</tr></thead><tbody>${rows}</tbody></table><div class="cricket-legend"><span>╱ = 1 mark</span><span>✕ = 2 marks</span><span>⊗ = closed</span></div></div>
-  <div class="card"><div class="current-turn"><strong>${esc(p.name)}</strong><span>Dart ${g.darts+1} of 3</span></div><p class="muted" style="text-align:center">Choose the ring, then tap the number you hit. Bull buttons record the correct marks directly.</p><div class="multis cricket-mults"><button data-cm="1" class="${g.mult===1?'active':''}">Single</button><button data-cm="2" class="${g.mult===2?'active':''}">Double</button><button data-cm="3" class="${g.mult===3?'active':''}">Treble</button></div><div class="cricket-targets">${[20,19,18,17,16,15].map(seg=>`<button data-cseg="${seg}" ${g.players.every(x=>x.marks[seg]>=3)?'disabled':''}>${seg}</button>`).join('')}<button data-cbull="1" ${g.players.every(x=>x.marks[25]>=3)?'disabled':''}>Outer Bull<br><small>1 mark</small></button><button data-cbull="2" ${g.players.every(x=>x.marks[25]>=3)?'disabled':''}>Bullseye<br><small>2 marks</small></button><button class="miss-button" data-cmiss="1">Miss</button></div></div>`;
+  view.innerHTML=`<div class="section-title"><h2>Cricket</h2><span class="muted"><strong>${esc(p.name)}</strong> · dart ${g.darts+1}/3</span></div>
+  <details class="cricket-rules"><summary>How Cricket works</summary><div>Close 20–15 and Bull with 3 marks. Extra marks score while an opponent still has that target open. Close everything while level or ahead to win.</div></details>
+  <div class="card table-wrap cricket-score-card"><table class="cricket-table"><thead><tr><th>Target</th>${g.players.map((x,i)=>`<th>${esc(x.name)}${i===g.turn?' ●':''}<div class="table-score">${x.score} pts</div></th>`).join('')}</tr></thead><tbody>${rows}</tbody></table><div class="cricket-legend"><span>╱ 1</span><span>✕ 2</span><span>⊗ closed</span></div></div>
+  <div class="card cricket-controls"><div class="multis cricket-mults"><button data-cm="1" class="${g.mult===1?'active':''}">Single</button><button data-cm="2" class="${g.mult===2?'active':''}">Double</button><button data-cm="3" class="${g.mult===3?'active':''}">Treble</button></div><div class="cricket-targets">${[20,19,18,17,16,15].map(seg=>`<button data-cseg="${seg}" ${g.players.every(x=>x.marks[seg]>=3)?'disabled':''}>${seg}</button>`).join('')}<button data-cbull="1" ${g.players.every(x=>x.marks[25]>=3)?'disabled':''}>Outer Bull<br><small>1 mark</small></button><button data-cbull="2" ${g.players.every(x=>x.marks[25]>=3)?'disabled':''}>Bullseye<br><small>2 marks</small></button><button class="miss-button" data-cmiss="1">Miss</button></div></div>`;
   $$('[data-cm]').forEach(b=>b.onclick=()=>{g.mult=+b.dataset.cm;renderCricket();});
   $$('[data-cseg]').forEach(b=>b.onclick=()=>cricketDart(+b.dataset.cseg,g.mult));
   $$('[data-cbull]').forEach(b=>b.onclick=()=>cricketDart(25,+b.dataset.cbull));
@@ -781,10 +882,13 @@ async function finishPractice(){
   const g=practice;
   if(g.mode!=='bobs27'){route('practice-menu');return;}
   const score=g.score,detail={hits:g.hits,darts:g.attempts,last_target:g.lastTarget,busted:g.busted};
-  try{await api('/api/practice',{method:'POST',body:JSON.stringify({player_id:g.player.id,mode:g.mode,score,details_json:JSON.stringify(detail)})});}catch(e){}
+  try{await api('/api/practice',{method:'POST',body:JSON.stringify({player_id:g.player.id,mode:g.mode,score,details_json:JSON.stringify(detail)})});}catch(e){toast('Result could not be saved',2600);}
+  let boards={};try{boards=await api('/api/leaderboards');}catch(e){}
+  const record=(boards.bobs27||[])[0];
+  const recordHtml=record?`<div class="record-strip"><span>🏆 Bob's 27 high score</span><strong>${esc(record.name)} · ${Number(record.value).toLocaleString()}</strong></div>`:'';
   const title=g.busted?'Game over':'Bob’s 27 complete';
   const detailText=g.busted?`You went out at ${g.lastTarget}. Final score: ${g.score}`:`You made it from D1 through Bull. Final score: ${g.score}`;
-  view.innerHTML=`<div class="card"><div class="target-big">${g.busted?'×':'✓'}</div><h2 style="text-align:center">${title}</h2><p style="text-align:center" class="muted">${detailText}</p><div class="actions"><button class="btn primary" id="pracAgain">Again</button><button class="btn" id="pracHome">Home</button></div></div>`;
+  view.innerHTML=`<div class="card result-hero"><div class="target-big">${g.busted?'×':'✓'}</div><h2>${title}</h2><p class="muted">${detailText}</p>${recordHtml}</div><div class="actions"><button class="btn primary" id="pracAgain">Again</button><button class="btn" id="pracHome">Home</button></div>`;
   $('#pracAgain').onclick=()=>practiceSetup(g.mode);$('#pracHome').onclick=home;
 }
 

@@ -1,5 +1,5 @@
-const CACHE = 'dartdeck-v050';
-const CORE = ['/', '/static/app.js?v=0.5.0', '/static/styles.css?v=0.5.0', '/branding/icon-192.png', '/branding/icon-512.png'];
+const CACHE = 'dartdeck-v061';
+const CORE = ['/', '/static/app.js?v=0.6.1', '/static/styles.css?v=0.6.1', '/branding/icon-192.png', '/branding/icon-512.png'];
 
 self.addEventListener('install', event => {
   self.skipWaiting();

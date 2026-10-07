@@ -1,4 +1,4 @@
-# DartDeck v0.5.0
+# DartDeck v0.6.1
 
 A self-hosted darts scoring and practice PWA for Docker / Portainer.
 
@@ -136,7 +136,7 @@ Rebuilding or replacing the DartDeck container does not remove this data as long
 
 
 ## Updating from v0.4.0
-v0.5.0 keeps the focused game list from v0.4.0 and adds real-play refinements:
+v0.6.0 keeps the focused game list from v0.4.0 and adds real-play refinements:
 
 - X01 checkout confirmation returns automatically to Quick Score.
 - All multiplayer game setup screens remember the last-used players and order; Training remembers its last player.
@@ -155,3 +155,21 @@ The retained game set remains:
 - The screen wake lock still works when enabled, but the floating **Screen awake** badge has been removed.
 
 Redeploy/rebuild the container, then reload DartDeck once. Existing data in the `dartdeck_data` volume is preserved.
+
+
+## v0.6.0 additions
+
+- More compact Cricket scoring screen and final-score display.
+- Persistent Shanghai, Halve-It and Bob's 27 top-five leaderboards.
+- Cricket and Killer win leaderboards.
+- Dynamic player honours/badges for leaderboard leaders, most 180s, highest checkout and best checkout percentage (minimum 10 attempts).
+- Party-game results are saved from v0.6.0 onward so leaderboards can build over time.
+
+
+## v0.6.1 additions
+
+- Quick Score checkouts now ask **Number of darts?** instead of forcing dart-by-dart reconstruction.
+- The selected 1 / 2 / 3 dart count is used for averages and checkout statistics.
+- Impossible dart counts are disabled based on the minimum valid checkout route.
+- Exact dart-by-dart checkout entry remains available as an optional fallback.
+- Quick Score returns to normal automatically after checkout confirmation.

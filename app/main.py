@@ -34,7 +34,7 @@ DEFAULT_SETTINGS = {
 ALLOWED_FONTS = {"modern", "system", "rounded", "condensed", "classic", "mono"}
 HEX_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 
-app = FastAPI(title="DartDeck", version="0.5.0")
+app = FastAPI(title="DartDeck", version="0.6.1")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
@@ -333,11 +333,68 @@ def stats() -> list[dict[str, Any]]:
                 COALESCE(SUM(mp.checkout_attempts),0) AS checkout_attempts
             FROM players p
             LEFT JOIN match_players mp ON mp.player_id=p.id
+              AND mp.match_id IN (SELECT id FROM matches WHERE game_type='x01')
             GROUP BY p.id,p.name
             ORDER BY p.name COLLATE NOCASE
             """
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+def _score_leaderboard(conn: sqlite3.Connection, game_type: str, limit: int = 100) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        """
+        SELECT p.id AS player_id, p.name, MAX(mp.points_scored) AS value
+        FROM match_players mp
+        JOIN matches m ON m.id=mp.match_id
+        JOIN players p ON p.id=mp.player_id
+        WHERE m.game_type=?
+        GROUP BY p.id,p.name
+        ORDER BY value DESC, p.name COLLATE NOCASE
+        LIMIT ?
+        """,
+        (game_type, limit),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def _wins_leaderboard(conn: sqlite3.Connection, game_type: str, limit: int = 100) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        """
+        SELECT p.id AS player_id, p.name, COUNT(*) AS value
+        FROM matches m
+        JOIN players p ON p.id=m.winner_player_id
+        WHERE m.game_type=?
+        GROUP BY p.id,p.name
+        ORDER BY value DESC, p.name COLLATE NOCASE
+        LIMIT ?
+        """,
+        (game_type, limit),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+@app.get("/api/leaderboards")
+def leaderboards() -> dict[str, Any]:
+    with db() as conn:
+        bobs = conn.execute(
+            """
+            SELECT p.id AS player_id, p.name, MAX(pr.score) AS value
+            FROM practice_results pr
+            JOIN players p ON p.id=pr.player_id
+            WHERE pr.mode='bobs27'
+            GROUP BY p.id,p.name
+            ORDER BY value DESC, p.name COLLATE NOCASE
+            LIMIT 100
+            """
+        ).fetchall()
+        return {
+            "shanghai": _score_leaderboard(conn, "shanghai"),
+            "halveit": _score_leaderboard(conn, "halveit"),
+            "bobs27": [dict(r) for r in bobs],
+            "cricket_wins": _wins_leaderboard(conn, "cricket"),
+            "killer_wins": _wins_leaderboard(conn, "killer"),
+        }
 
 
 @app.get("/")
