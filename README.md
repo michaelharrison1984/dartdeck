@@ -1,4 +1,4 @@
-# DartDeck v0.7.1
+# DartDeck v0.7.2
 
 A self-hosted darts scoring and practice PWA for Docker / Portainer.
 
@@ -16,7 +16,7 @@ A self-hosted darts scoring and practice PWA for Docker / Portainer.
 - Rich player dashboards with X01, party-game and training stats
 - Two-player X01 head-to-head rivalry stats and streaks
 - Party games: Cricket, Killer, Shanghai, Halve-It
-- Training modes: Checkout Trainer, 121 (9 darts / 3 visits with quick-score tally), Bob's 27 (D1–D20 then Bull)
+- Training Centre: Checkout Trainer, Doubles Trainer, 121 (9 darts / 3 visits with quick-score tally), Bob's 27 (D1–D20 then Bull)
 - Custom theme colours and font choice
 - Uploadable app icon / favicon, automatically resized for the browser and PWA
 - Installable PWA manifest with 192px / 512px icons and iOS home-screen icon
@@ -192,3 +192,13 @@ Redeploy/rebuild the container, then reload DartDeck once. Existing data in the 
 - Training setup screens show the selected player's relevant history before starting a session.
 
 Existing SQLite data remains compatible; the new analytics build on recorded history as new training sessions are saved.
+
+
+## v0.7.2 additions
+
+- Renamed Training to **Training Centre** across the home screen, PWA shortcut and practice flow.
+- Added a dedicated **Doubles Trainer** with four session types: All Doubles, Checkout Doubles, Weakest Doubles and Custom.
+- Doubles Trainer supports 1–3 passes through the selected targets and records 0–3 hits from each three-dart visit.
+- Weakest Doubles uses the player's recorded Doubles Trainer hit rates and falls back to common checkout doubles until enough history exists.
+- Added per-double hit-rate analytics, strongest/weakest doubles, session accuracy and all-time accuracy to Player Dashboards and training finish screens.
+- Existing SQLite data remains compatible; Doubles Trainer analytics start building from sessions recorded in v0.7.2 onward.

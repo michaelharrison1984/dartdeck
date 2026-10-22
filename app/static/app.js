@@ -17,7 +17,7 @@ let deferredInstallPrompt = null;
 let wakeLock = null;
 let gameplayActive = false;
 let serviceWorkerReady = false;
-const APP_VERSION = '0.7.1';
+const APP_VERSION = '0.7.2';
 const BOT_LEVELS = {
   beginner:{label:'Beginner',avg:30,checkout:.08},
   pub:{label:'Pub player',avg:45,checkout:.13},
@@ -141,7 +141,7 @@ function home(){
     <div class="grid">
       ${homeCard('🎯','Quick Game','301, 501 or 701 for up to four players.','x01-setup')}
       ${homeCard('👥','Party Games','Cricket, Killer, Shanghai and Halve-It.','party-menu')}
-      ${homeCard('🏋️','Training','Checkout practice, 121 and Bob’s 27.','practice-menu')}
+      ${homeCard('🏋️','Training Centre','Checkout, doubles, 121 and Bob’s 27 practice.','practice-menu')}
       ${homeCard('📊','Stats','Leaderboards, badges, averages, 180s and checkout data.','stats')}
     </div>
     <div class="section-title"><h2>Designed for the oche</h2></div>
@@ -155,7 +155,7 @@ async function playerManager(){
   await loadPlayers();
   view.innerHTML = `<div class="section-title"><h2>Players</h2><span class="muted">Tap a player to open their dashboard</span></div>
   <div class="card"><div class="form-grid"><label>New player<input id="newPlayer" maxlength="40" placeholder="Player name"></label></div><div class="actions" style="justify-content:flex-start"><button class="btn primary" id="addPlayer">Add player</button></div></div>
-  <div class="player-directory">${players.map(p=>`<div class="card player-directory-card" data-player-dashboard="${p.id}" tabindex="0"><div class="player-avatar">${esc(p.name).slice(0,1).toUpperCase()}</div><div class="player-directory-copy"><strong>${esc(p.name)}</strong><div class="muted">Stats, badges, training & recent games</div></div><button class="btn danger player-delete" data-del="${p.id}" title="Delete player">×</button></div>`).join('') || '<div class="card"><span class="muted">No players yet.</span></div>'}</div>`;
+  <div class="player-directory">${players.map(p=>`<div class="card player-directory-card" data-player-dashboard="${p.id}" tabindex="0"><div class="player-avatar">${esc(p.name).slice(0,1).toUpperCase()}</div><div class="player-directory-copy"><strong>${esc(p.name)}</strong><div class="muted">Stats, badges, Training Centre & recent games</div></div><button class="btn danger player-delete" data-del="${p.id}" title="Delete player">×</button></div>`).join('') || '<div class="card"><span class="muted">No players yet.</span></div>'}</div>`;
   $('#addPlayer').onclick=async()=>{const name=$('#newPlayer').value.trim();if(!name)return;try{await api('/api/players',{method:'POST',body:JSON.stringify({name})});await playerManager();toast('Player added');}catch(e){toast(e.message,2500)}};
   $$('[data-player-dashboard]').forEach(c=>{c.onclick=e=>{if(e.target.closest('[data-del]'))return;playerDashboard(+c.dataset.playerDashboard)};c.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();playerDashboard(+c.dataset.playerDashboard);}};});
   $$('[data-del]').forEach(b=>b.onclick=async e=>{e.stopPropagation();try{await api('/api/players/'+b.dataset.del,{method:'DELETE'});await playerManager()}catch(err){toast(err.message,2500)}});
@@ -164,7 +164,7 @@ function shortDate(value){try{return new Date(value).toLocaleDateString(undefine
 function gameLabel(t){return ({x01:'X01',cricket:'Cricket',killer:'Killer',shanghai:'Shanghai',halveit:'Halve-It'})[t]||t;}
 function metricCard(icon,label,value,sub=''){return `<div class="card metric-card"><span>${icon}</span><strong>${value}</strong><small>${label}</small>${sub?`<em>${esc(sub)}</em>`:''}</div>`;}
 function trainingBars(items=[]){
-  if(!items.length)return '<p class="muted">Complete Bob’s 27 sessions to build double-by-double analytics.</p>';
+  if(!items.length)return '<p class="muted">Complete some double-focused training to build these analytics.</p>';
   return `<div class="double-bars">${items.map(x=>`<div class="double-bar-row"><span>${esc(x.target)}</span><div class="double-track"><i style="width:${Math.max(2,Math.min(100,+x.rate||0))}%"></i></div><strong>${fmt(x.rate,0)}%</strong></div>`).join('')}</div>`;
 }
 async function playerDashboard(playerId){
@@ -181,11 +181,12 @@ async function playerDashboard(playerId){
       <div class="card"><h3>Other games</h3><div class="mini-stat-list"><div><span>🏏 Cricket wins</span><strong>${party.cricket?.wins||0}</strong></div><div><span>👑 Killer wins</span><strong>${party.killer?.wins||0}</strong></div><div><span>🌏 Shanghai best</span><strong>${party.shanghai?.best_score??'—'}</strong></div><div><span>✂️ Halve-It best</span><strong>${party.halveit?.best_score??'—'}</strong></div><div><span>🎯 Bob's 27 best</span><strong>${t.bobs27?.best_score??'—'}</strong></div></div></div>
       <div class="card"><h3>Head-to-head</h3>${other.length?`<label>Compare with<select id="profileOpponent">${other.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select></label><div class="actions" style="justify-content:flex-start"><button class="btn primary" id="profileCompare">View rivalry</button></div>`:'<p class="muted">Add another player to unlock head-to-head stats.</p>'}</div>
     </div>
-    <div class="section-title"><h2>Training analytics</h2><span class="muted">Improves as sessions are recorded</span></div>
+    <div class="section-title"><h2>Training Centre analytics</h2><span class="muted">Improves as sessions are recorded</span></div>
     <div class="training-analytics-grid">
       <div class="card"><h3>🎯 Checkout Trainer</h3><div class="training-big">${t.checkout?.attempts?fmt(t.checkout.rate,1)+'%':'—'}</div><p class="muted">${t.checkout?.hits||0} finishes from ${t.checkout?.attempts||0} attempts · ${t.checkout?.sessions||0} sessions</p></div>
       <div class="card"><h3>🔢 121</h3><div class="training-big">${t['121']?.best_target||'—'}</div><p class="muted">Best completed target · ${t['121']?.successes||0} successful levels from ${t['121']?.attempts||0} attempts</p></div>
-      <div class="card"><h3>🎯 Bob's 27</h3><div class="training-big">${t.bobs27?.best_score??'—'}</div><p class="muted">Personal best · ${t.bobs27?.sessions||0} recorded sessions</p><h4>Strongest doubles</h4>${trainingBars(t.bobs27?.best_doubles||[])}${t.bobs27?.weak_doubles?.length?`<h4 style="margin-top:14px">Needs work</h4>${trainingBars(t.bobs27.weak_doubles)}`:''}</div>
+      <div class="card"><h3>🎯 Doubles Trainer</h3><div class="training-big">${t.doubles?.darts?fmt(t.doubles.rate,1)+'%':'—'}</div><p class="muted">${t.doubles?.hits||0} hits from ${t.doubles?.darts||0} darts · ${t.doubles?.sessions||0} sessions</p><h4>Strongest doubles</h4>${trainingBars(t.doubles?.best_doubles||[])}${t.doubles?.weak_doubles?.length?`<h4 style="margin-top:14px">Needs work</h4>${trainingBars(t.doubles.weak_doubles)}`:''}</div>
+      <div class="card"><h3>🎯 Bob's 27</h3><div class="training-big">${t.bobs27?.best_score??'—'}</div><p class="muted">Personal best · ${t.bobs27?.sessions||0} recorded sessions</p></div>
     </div>
     <div class="section-title"><h2>Recent games</h2></div><div class="card history-list">${recent}</div>
     <div class="actions"><button class="btn" id="backPlayers">Back to players</button><button class="btn" id="backStats">Leaderboards</button></div>`;
@@ -887,33 +888,69 @@ function practiceMenu(){
   setGameplayActive(false);
   const modes=[
     ['🎯','Checkout Trainer','Random finishes with route advice.','checkout'],
+    ['🎯','Doubles Trainer','Practise the doubles that matter, with hit-rate analytics.','doubles'],
     ['🔢','121','Keep a running total and finish each target within 9 darts.','121'],
     ['🎯','Bob’s 27','D1 through D20, then Bull — three darts at every double.','bobs27']
   ];
-  view.innerHTML=`<div class="section-title"><h2>Training</h2><span class="muted">Focused practice that benefits from a scorer</span></div><div class="grid">${modes.map(m=>`<button class="card click" data-practice="${m[3]}" style="text-align:left;color:inherit"><div class="emoji">${m[0]}</div><h2>${m[1]}</h2><p class="muted">${m[2]}</p></button>`).join('')}</div>`;
+  view.innerHTML=`<div class="training-centre-hero card"><div><span class="eyebrow">PRACTICE WITH PURPOSE</span><h2>Training Centre</h2><p class="muted">Build checkout confidence, expose weak doubles and track improvement over time. Every recorded session feeds your Player Dashboard.</p></div><div class="training-centre-mark">🎯</div></div><div class="grid training-centre-grid">${modes.map(m=>`<button class="card click" data-practice="${m[3]}" style="text-align:left;color:inherit"><div class="emoji">${m[0]}</div><h2>${m[1]}</h2><p class="muted">${m[2]}</p></button>`).join('')}</div>`;
   $$('[data-practice]').forEach(b=>b.onclick=()=>practiceSetup(b.dataset.practice));
 }
+const DOUBLE_PRESETS={
+  all:[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,25],
+  checkout:[20,16,18,12,10,8,4,6,14,2],
+  power:[20,16,18,12,10,8]
+};
+function doubleLabel(n){return +n===25?'Bull':`D${n}`;}
+function renderDoubleTargetChoices(){return DOUBLE_PRESETS.all.map(n=>`<label class="double-choice"><input type="checkbox" name="doubleTarget" value="${n}" ${DOUBLE_PRESETS.power.includes(n)?'checked':''}><span>${doubleLabel(n)}</span></label>`).join('');}
 async function practiceSetup(mode){
   setGameplayActive(false);await loadPlayers();if(!players.length){route('players');return;}
-  view.innerHTML=`<div class="section-title"><h2>${practiceName(mode)}</h2><span class="muted">Training session</span></div><div class="card"><div class="form-grid"><label>Player<select id="pracPlayer">${players.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select></label></div><div id="trainingSnapshot" class="training-snapshot"></div><div class="actions"><button class="btn primary big" id="startPractice">Start</button></div></div>`;
+  const doublesSetup=mode==='doubles'?`<div class="training-options"><h3>Session type</h3><div class="training-mode-grid">
+    <label class="training-mode-option"><input type="radio" name="doubleMode" value="all"><span><strong>All Doubles</strong><small>D1 → D20 + Bull</small></span></label>
+    <label class="training-mode-option"><input type="radio" name="doubleMode" value="checkout" checked><span><strong>Checkout Doubles</strong><small>D20, D16, D18, D12, D10, D8…</small></span></label>
+    <label class="training-mode-option"><input type="radio" name="doubleMode" value="weak"><span><strong>Weakest Doubles</strong><small>Your six lowest recorded hit rates</small></span></label>
+    <label class="training-mode-option"><input type="radio" name="doubleMode" value="custom"><span><strong>Custom</strong><small>Choose exactly what to practise</small></span></label>
+  </div><div class="form-grid training-pass-row"><label>Passes through targets<select id="doublePasses"><option value="1" selected>1 pass</option><option value="2">2 passes</option><option value="3">3 passes</option></select></label></div><div id="customDoubleWrap" class="custom-double-wrap hidden"><h4>Choose doubles</h4><div class="double-choice-grid">${renderDoubleTargetChoices()}</div></div><div id="weakDoubleHint" class="game-help hidden"><strong>Adaptive session</strong><span>DartDeck will choose your six weakest recorded doubles. If there is not enough history yet, it will start with the common checkout doubles.</span></div></div>`:'';
+  view.innerHTML=`<div class="section-title"><h2>${practiceName(mode)}</h2><span class="muted">Training Centre</span></div><div class="card"><div class="form-grid"><label>Player<select id="pracPlayer">${players.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select></label></div>${doublesSetup}<div id="trainingSnapshot" class="training-snapshot"></div><div class="actions"><button class="btn primary big" id="startPractice">Start</button><button class="btn" id="backTrainingCentre">Training Centre</button></div></div>`;
   const remembered=lastTrainingPlayerId();if(remembered)$('#pracPlayer').value=String(remembered);
-  const snapshot=async()=>{const id=+$('#pracPlayer').value,el=$('#trainingSnapshot');el.innerHTML='<span class="muted">Loading training history…</span>';try{const a=await api(`/api/training-analytics/${id}`);if(mode==='checkout')el.innerHTML=`<strong>${a.checkout.attempts?fmt(a.checkout.rate,1)+'%':'No recorded sessions yet'}</strong><span>Checkout success · ${a.checkout.hits} from ${a.checkout.attempts} attempts</span>`;if(mode==='121')el.innerHTML=`<strong>${a['121'].best_target||'No recorded target yet'}</strong><span>Best completed target · ${a['121'].sessions} sessions</span>`;if(mode==='bobs27')el.innerHTML=`<strong>${a.bobs27.best_score||'No recorded score yet'}</strong><span>Personal best${a.bobs27.best_doubles?.length?` · strongest ${a.bobs27.best_doubles[0].target} (${fmt(a.bobs27.best_doubles[0].rate,0)}%)`:''}</span>`;}catch(e){el.innerHTML='<span class="muted">No training history available.</span>';}};
+  const snapshot=async()=>{const id=+$('#pracPlayer').value,el=$('#trainingSnapshot');el.innerHTML='<span class="muted">Loading training history…</span>';try{const a=await api(`/api/training-analytics/${id}`);if(mode==='checkout')el.innerHTML=`<strong>${a.checkout.attempts?fmt(a.checkout.rate,1)+'%':'No recorded sessions yet'}</strong><span>Checkout success · ${a.checkout.hits} from ${a.checkout.attempts} attempts</span>`;if(mode==='121')el.innerHTML=`<strong>${a['121'].best_target||'No recorded target yet'}</strong><span>Best completed target · ${a['121'].sessions} sessions</span>`;if(mode==='bobs27')el.innerHTML=`<strong>${a.bobs27.best_score||'No recorded score yet'}</strong><span>Personal best</span>`;if(mode==='doubles'){const d=a.doubles||{};el.innerHTML=`<strong>${d.darts?fmt(d.rate,1)+'%':'No Doubles Trainer sessions yet'}</strong><span>${d.darts?`${d.hits} hits from ${d.darts} darts${d.best_doubles?.length?` · strongest ${d.best_doubles[0].target} (${fmt(d.best_doubles[0].rate,0)}%)`:''}`:'Your first session will start building double-by-double feedback.'}</span>`;}}catch(e){el.innerHTML='<span class="muted">No training history available.</span>';}};
   $('#pracPlayer').onchange=snapshot;await snapshot();
-  $('#startPractice').onclick=()=>{const id=+$('#pracPlayer').value;rememberTrainingPlayer(id);startPractice(mode,id);};
+  if(mode==='doubles'){
+    const syncDoubleOptions=()=>{const selected=document.querySelector('input[name="doubleMode"]:checked')?.value||'checkout';$('#customDoubleWrap').classList.toggle('hidden',selected!=='custom');$('#weakDoubleHint').classList.toggle('hidden',selected!=='weak');};
+    $$('input[name="doubleMode"]').forEach(r=>r.onchange=syncDoubleOptions);syncDoubleOptions();
+  }
+  $('#backTrainingCentre').onclick=practiceMenu;
+  $('#startPractice').onclick=async()=>{const id=+$('#pracPlayer').value;rememberTrainingPlayer(id);let options={};if(mode==='doubles'){
+      const submode=document.querySelector('input[name="doubleMode"]:checked')?.value||'checkout',passes=+$('#doublePasses').value||1;let targets=[];
+      if(submode==='all')targets=[...DOUBLE_PRESETS.all];
+      else if(submode==='checkout')targets=[...DOUBLE_PRESETS.checkout];
+      else if(submode==='custom')targets=$$('input[name="doubleTarget"]:checked').map(x=>+x.value);
+      else {try{const a=await api(`/api/training-analytics/${id}`);targets=(a.doubles?.weak_doubles||[]).slice(0,6).map(x=>x.target==='Bull'?25:+String(x.target).replace('D','')).filter(Boolean);}catch(e){}for(const n of DOUBLE_PRESETS.power){if(targets.length>=6)break;if(!targets.includes(n))targets.push(n);}if(!targets.length)targets=[...DOUBLE_PRESETS.power];}
+      if(!targets.length){toast('Choose at least one double',2200);return;}
+      options={submode,passes,targets};
+    }startPractice(mode,id,options);};
 }
-function practiceName(m){return ({checkout:'Checkout Trainer','121':'121',bobs27:"Bob's 27"})[m]}
-function startPractice(mode,playerId){
+function practiceName(m){return ({checkout:'Checkout Trainer',doubles:'Doubles Trainer','121':'121',bobs27:"Bob's 27"})[m]}
+function startPractice(mode,playerId,options={}){
   setGameplayActive(true);document.body.classList.remove('x01-gameplay');const p=players.find(x=>x.id===playerId);
-  practice={mode,player:p,round:1,score:mode==='bobs27'?27:0,target:mode==='121'?121:mode==='checkout'?randomCheckout():1,remaining:mode==='121'?121:0,hits:0,attempts:0,targetVisit:1,quick:'',checkoutPending:false,busted:false,lastTarget:null,targetHits:{}};
+  const doubleSequence=mode==='doubles'?Array.from({length:options.passes||1},()=>options.targets||DOUBLE_PRESETS.checkout).flat():[];
+  practice={mode,player:p,options,round:1,score:mode==='bobs27'?27:0,target:mode==='121'?121:mode==='checkout'?randomCheckout():1,remaining:mode==='121'?121:0,hits:0,attempts:0,targetVisit:1,quick:'',checkoutPending:false,busted:false,lastTarget:null,targetHits:{},targetDarts:{},doubleSequence,doubleIndex:0};
   renderPractice();
 }
 function randomCheckout(){const choices=[];for(let n=40;n<=170;n++)if(getCheckout(n,'double'))choices.push(n);return choices[Math.floor(Math.random()*choices.length)];}
-function renderPractice(){const g=practice;if(g.mode==='checkout')return renderCheckoutTrainer();if(g.mode==='121')return render121();if(g.mode==='bobs27')return renderBobs27();}
+function renderPractice(){const g=practice;if(g.mode==='checkout')return renderCheckoutTrainer();if(g.mode==='doubles')return renderDoublesTrainer();if(g.mode==='121')return render121();if(g.mode==='bobs27')return renderBobs27();}
 function renderCheckoutTrainer(){
   const g=practice,rate=g.attempts?g.hits*100/g.attempts:0;
   view.innerHTML=`<div class="section-title"><h2>${practiceName(g.mode)}</h2><span class="muted">Round ${g.round}</span></div><div class="card"><div class="target-big">${g.target}</div><div class="checkout"><strong>Route:</strong> ${(getCheckout(g.target,'double')||['No route']).join(' → ')}</div><p class="muted" style="text-align:center">Did you finish it within 3 darts?</p><div class="actions"><button class="btn primary big" data-pr="hit">Checkout ✓</button><button class="btn big" data-pr="miss">Miss</button></div><div class="training-live"><strong>${fmt(rate,1)}%</strong><span>${g.hits} checkouts from ${g.attempts} attempts</span></div><div class="actions"><button class="btn" id="endTraining">End session</button></div></div>`;
   $$('[data-pr]').forEach(b=>b.onclick=()=>{g.attempts++;if(b.dataset.pr==='hit')g.hits++;g.target=randomCheckout();g.round++;renderPractice();});$('#endTraining').onclick=finishPractice;
 }
+function renderDoublesTrainer(){
+  const g=practice,target=g.doubleSequence[g.doubleIndex],label=doubleLabel(target),rate=g.attempts?g.hits*100/g.attempts:0,total=g.doubleSequence.length;
+  if(target==null){finishPractice();return;}
+  const subLabel=({all:'All Doubles',checkout:'Checkout Doubles',weak:'Weakest Doubles',custom:'Custom'})[g.options.submode]||'Doubles';
+  view.innerHTML=`<div class="section-title"><h2>Doubles Trainer</h2><span class="muted">${subLabel}</span></div><div class="training-score-grid"><div class="target-focus target-focus-large"><span>CURRENT TARGET · ${g.doubleIndex+1} OF ${total}</span><strong>${label}</strong></div><div class="target-focus"><span>SESSION ACCURACY</span><strong>${g.attempts?fmt(rate,0)+'%':'—'}</strong></div></div><div class="card"><p class="muted" style="text-align:center">Throw three darts at <b>${label}</b>, then record how many hit the double.</p><div class="hit-count-grid">${[0,1,2,3].map(n=>`<button class="${n?'primary':''}" data-doublehit="${n}"><strong>${n}</strong><span>${n===1?'hit':'hits'}</span></button>`).join('')}</div><div class="training-live"><strong>${g.hits} / ${g.attempts}</strong><span>Hits from darts thrown so far</span></div><div class="actions"><button class="btn" id="endTraining">End session</button></div></div>`;
+  $$('[data-doublehit]').forEach(b=>b.onclick=()=>doublesVisit(+b.dataset.doublehit));$('#endTraining').onclick=finishPractice;
+}
+function doublesVisit(hits){const g=practice,target=g.doubleSequence[g.doubleIndex],key=String(target);g.targetHits[key]=(g.targetHits[key]||0)+hits;g.targetDarts[key]=(g.targetDarts[key]||0)+3;g.hits+=hits;g.attempts+=3;g.lastTarget=doubleLabel(target);g.doubleIndex++;g.round++;if(g.doubleIndex>=g.doubleSequence.length){finishPractice();return;}renderDoublesTrainer();}
 function practiceQuickPad(prefix,value,label='Enter visit score'){return partyQuickPad(prefix,value,label);}
 function bindPracticeQuickPad(prefix,state,onSubmit){bindPartyQuickPad(prefix,state,onSubmit);}
 function render121(){
@@ -931,20 +968,22 @@ function renderBobs27(){
   view.innerHTML=`<div class="section-title"><h2>Bob's 27</h2><span class="muted">Score ${g.score}</span></div><div class="game-help"><strong>D1 → D20 → Bull</strong><span>Three darts at each double. Every hit adds the double’s value; miss all three and that value is subtracted. Reach zero or below and the game ends.</span></div><div class="training-score-grid"><div class="target-focus target-focus-large"><span>CURRENT TARGET · ${g.target} OF 21</span><strong>${targetLabel}</strong></div><div class="target-focus"><span>CURRENT SCORE</span><strong>${g.score}</strong></div></div><div class="card"><p class="muted" style="text-align:center">How many of your three darts hit <b>${targetLabel}</b>? ${targetLabel==='Bull'?'Each inner Bull hit is worth 50.':`Each hit is worth ${doubleValue}.`}</p><div class="hit-count-grid">${[0,1,2,3].map(n=>`<button class="${n?'primary':''}" data-bobhit="${n}"><strong>${n}</strong><span>${n===1?'hit':'hits'}</span></button>`).join('')}</div><div class="actions"><button class="btn" id="endTraining">End session</button></div></div>`;
   $$('[data-bobhit]').forEach(b=>b.onclick=()=>bob27Visit(+b.dataset.bobhit));$('#endTraining').onclick=finishPractice;
 }
-function bob27Visit(hits){const g=practice,targetLabel=g.target===21?'Bull':'D'+g.target,doubleValue=g.target===21?50:g.target*2,key=g.target===21?'25':String(g.target);g.targetHits[key]=hits;g.hits+=hits;g.attempts+=3;g.lastTarget=targetLabel;g.score+=hits>0?doubleValue*hits:-doubleValue;if(g.score<=0){g.busted=true;finishPractice();return;}if(g.target===21){finishPractice();return;}g.target++;renderBobs27();}
+function bob27Visit(hits){const g=practice,targetLabel=g.target===21?'Bull':'D'+g.target,doubleValue=g.target===21?50:g.target*2,key=g.target===21?'25':String(g.target);g.targetHits[key]=hits;g.targetDarts[key]=3;g.hits+=hits;g.attempts+=3;g.lastTarget=targetLabel;g.score+=hits>0?doubleValue*hits:-doubleValue;if(g.score<=0){g.busted=true;finishPractice();return;}if(g.target===21){finishPractice();return;}g.target++;renderBobs27();}
 async function finishPractice(){
   setGameplayActive(false);const g=practice;let score=0,detail={};
   if(g.mode==='checkout'){score=g.attempts?g.hits*100/g.attempts:0;detail={hits:g.hits,attempts:g.attempts};}
+  if(g.mode==='doubles'){score=g.attempts?g.hits*100/g.attempts:0;detail={hits:g.hits,darts:g.attempts,submode:g.options.submode||'checkout',passes:g.options.passes||1,target_hits:g.targetHits,target_darts:g.targetDarts};}
   if(g.mode==='121'){score=g.hits?g.target-1:0;detail={hits:g.hits,attempts:g.attempts,current_target:g.target};}
-  if(g.mode==='bobs27'){score=g.score;detail={hits:g.hits,darts:g.attempts,last_target:g.lastTarget,busted:g.busted,target_hits:g.targetHits};}
+  if(g.mode==='bobs27'){score=g.score;detail={hits:g.hits,darts:g.attempts,last_target:g.lastTarget,busted:g.busted,target_hits:g.targetHits,target_darts:g.targetDarts};}
   try{await api('/api/practice',{method:'POST',body:JSON.stringify({player_id:g.player.id,mode:g.mode,score,details_json:JSON.stringify(detail)})});}catch(e){toast('Result could not be saved',2600);}
   let analytics={};try{analytics=await api(`/api/training-analytics/${g.player.id}`);}catch(e){}
   let title='',summary='',metrics='';
   if(g.mode==='checkout'){title='Checkout session complete';summary=`${g.hits} finishes from ${g.attempts} attempts`;metrics=`<div class="finish-highlight-grid"><div><strong>${g.attempts?fmt(g.hits*100/g.attempts,1)+'%':'—'}</strong><span>Session rate</span></div><div><strong>${analytics.checkout?.rate?fmt(analytics.checkout.rate,1)+'%':'—'}</strong><span>All-time rate</span></div></div>`;}
+  if(g.mode==='doubles'){const sessionRate=g.attempts?g.hits*100/g.attempts:0,d=analytics.doubles||{};title='Doubles session complete';summary=`${g.hits} hits from ${g.attempts} darts`;metrics=`<div class="finish-highlight-grid"><div><strong>${fmt(sessionRate,1)}%</strong><span>Session accuracy</span></div><div><strong>${d.darts?fmt(d.rate,1)+'%':'—'}</strong><span>All-time accuracy</span></div></div>${d.best_doubles?.length?`<div class="card training-finish-detail"><h3>Strongest doubles</h3>${trainingBars(d.best_doubles)}${d.weak_doubles?.length?`<h3 style="margin-top:16px">Needs work</h3>${trainingBars(d.weak_doubles)}`:''}</div>`:''}`;}
   if(g.mode==='121'){title='121 session complete';summary=g.hits?`Reached and completed ${g.target-1}`:'No level completed this session';metrics=`<div class="finish-highlight-grid"><div><strong>${g.hits?g.target-1:'—'}</strong><span>Session best</span></div><div><strong>${analytics['121']?.best_target||'—'}</strong><span>Personal best</span></div></div>`;}
-  if(g.mode==='bobs27'){title=g.busted?'Bob’s 27 — game over':'Bob’s 27 complete';summary=g.busted?`Out at ${g.lastTarget} · final score ${g.score}`:`Made it from D1 through Bull · final score ${g.score}`;metrics=`<div class="finish-highlight-grid"><div><strong>${g.score}</strong><span>Final score</span></div><div><strong>${analytics.bobs27?.best_score||g.score}</strong><span>Personal best</span></div></div>${analytics.bobs27?.best_doubles?.length?`<div class="card training-finish-detail"><h3>Strongest doubles</h3>${trainingBars(analytics.bobs27.best_doubles)}</div>`:''}`;}
-  view.innerHTML=`<div class="card result-hero result-complete"><div class="result-crown">🎯</div><span class="eyebrow">TRAINING SAVED</span><h2>${title}</h2><p class="muted">${summary}</p>${metrics}</div><div class="actions finish-actions"><button class="btn primary big" id="pracAgain">Again</button><button class="btn" id="pracProfile">Player dashboard</button><button class="btn" id="pracMenu">Training</button><button class="btn" id="pracHome">Home</button></div>`;
-  $('#pracAgain').onclick=()=>startPractice(g.mode,g.player.id);$('#pracProfile').onclick=()=>playerDashboard(g.player.id);$('#pracMenu').onclick=practiceMenu;$('#pracHome').onclick=home;
+  if(g.mode==='bobs27'){title=g.busted?'Bob’s 27 — game over':'Bob’s 27 complete';summary=g.busted?`Out at ${g.lastTarget} · final score ${g.score}`:`Made it from D1 through Bull · final score ${g.score}`;metrics=`<div class="finish-highlight-grid"><div><strong>${g.score}</strong><span>Final score</span></div><div><strong>${analytics.bobs27?.best_score||g.score}</strong><span>Personal best</span></div></div>`;}
+  view.innerHTML=`<div class="card result-hero result-complete"><div class="result-crown">🎯</div><span class="eyebrow">TRAINING SAVED</span><h2>${title}</h2><p class="muted">${summary}</p>${metrics}</div><div class="actions finish-actions"><button class="btn primary big" id="pracAgain">Again</button><button class="btn" id="pracProfile">Player dashboard</button><button class="btn" id="pracMenu">Training Centre</button><button class="btn" id="pracHome">Home</button></div>`;
+  $('#pracAgain').onclick=()=>startPractice(g.mode,g.player.id,g.options||{});$('#pracProfile').onclick=()=>playerDashboard(g.player.id);$('#pracMenu').onclick=practiceMenu;$('#pracHome').onclick=home;
 }
 
 async function route(name){

@@ -35,7 +35,7 @@ DEFAULT_SETTINGS = {
 ALLOWED_FONTS = {"modern", "system", "rounded", "condensed", "classic", "mono"}
 HEX_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 
-app = FastAPI(title="DartDeck", version="0.7.1")
+app = FastAPI(title="DartDeck", version="0.7.2")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
@@ -438,8 +438,10 @@ def player_profile(player_id: int) -> dict[str, Any]:
             "checkout": {"sessions":0,"hits":0,"attempts":0,"rate":0},
             "121": {"sessions":0,"best_target":0,"successes":0,"attempts":0,"rate":0},
             "bobs27": {"sessions":0,"best_score":0,"best_doubles":[],"weak_doubles":[]},
+            "doubles": {"sessions":0,"hits":0,"darts":0,"rate":0,"best_doubles":[],"weak_doubles":[],"by_double":[]},
         }
-        double_hits = {str(i): [0,0] for i in list(range(1,21))+[25]}
+        bob_double_hits = {str(i): [0,0] for i in list(range(1,21))+[25]}
+        trainer_double_hits = {str(i): [0,0] for i in list(range(1,21))+[25]}
         for r in practice_rows:
             mode=r["mode"]; detail=_json_obj(r["details_json"])
             if mode=='checkout':
@@ -448,18 +450,34 @@ def player_profile(player_id: int) -> dict[str, Any]:
                 z=practice_summary['121']; z['sessions']+=1; z['best_target']=max(z['best_target'],int(round(r['score'] or 0))); z['successes']+=int(detail.get('hits',0)); z['attempts']+=int(detail.get('attempts',0))
             elif mode=='bobs27':
                 z=practice_summary['bobs27']; z['sessions']+=1; z['best_score']=max(z['best_score'],int(round(r['score'] or 0)))
+                target_darts=detail.get('target_darts') or {}
                 for key,val in (detail.get('target_hits') or {}).items():
-                    if str(key) in double_hits:
-                        double_hits[str(key)][0]+=int(val); double_hits[str(key)][1]+=3
+                    if str(key) in bob_double_hits:
+                        bob_double_hits[str(key)][0]+=int(val); bob_double_hits[str(key)][1]+=int(target_darts.get(str(key),3))
+            elif mode=='doubles':
+                z=practice_summary['doubles']; z['sessions']+=1; z['hits']+=int(detail.get('hits',0)); z['darts']+=int(detail.get('darts',0))
+                target_darts=detail.get('target_darts') or {}
+                for key,val in (detail.get('target_hits') or {}).items():
+                    if str(key) in trainer_double_hits:
+                        trainer_double_hits[str(key)][0]+=int(val); trainer_double_hits[str(key)][1]+=int(target_darts.get(str(key),3))
         for key in ('checkout','121'):
             z=practice_summary[key]; z['rate']=round(z['hits' if key=='checkout' else 'successes']*100/z['attempts'],1) if z['attempts'] else 0
-        doubles=[]
-        for key,(hits,darts) in double_hits.items():
+        practice_summary['doubles']['rate']=round(practice_summary['doubles']['hits']*100/practice_summary['doubles']['darts'],1) if practice_summary['doubles']['darts'] else 0
+        bob_doubles=[]
+        for key,(hits,darts) in bob_double_hits.items():
             if darts:
                 label='Bull' if key=='25' else f'D{key}'
-                doubles.append({"target":label,"hits":hits,"darts":darts,"rate":round(hits*100/darts,1)})
-        practice_summary['bobs27']['best_doubles']=sorted(doubles,key=lambda x:(-x['rate'],-x['hits'],x['target']))[:5]
-        practice_summary['bobs27']['weak_doubles']=sorted(doubles,key=lambda x:(x['rate'],x['hits'],x['target']))[:5]
+                bob_doubles.append({"target":label,"hits":hits,"darts":darts,"rate":round(hits*100/darts,1)})
+        practice_summary['bobs27']['best_doubles']=sorted(bob_doubles,key=lambda x:(-x['rate'],-x['hits'],x['target']))[:5]
+        practice_summary['bobs27']['weak_doubles']=sorted(bob_doubles,key=lambda x:(x['rate'],x['hits'],x['target']))[:5]
+        trainer_doubles=[]
+        for key,(hits,darts) in trainer_double_hits.items():
+            if darts:
+                label='Bull' if key=='25' else f'D{key}'
+                trainer_doubles.append({"target":label,"hits":hits,"darts":darts,"rate":round(hits*100/darts,1)})
+        practice_summary['doubles']['by_double']=sorted(trainer_doubles,key=lambda x:(25 if x['target']=='Bull' else int(x['target'][1:])))
+        practice_summary['doubles']['best_doubles']=sorted(trainer_doubles,key=lambda x:(-x['rate'],-x['hits'],x['target']))[:5]
+        practice_summary['doubles']['weak_doubles']=sorted(trainer_doubles,key=lambda x:(x['rate'],x['hits'],x['target']))[:5]
         recent_matches = conn.execute(
             """
             SELECT m.id,m.game_type,m.start_score,m.winner_player_id,m.played_at,mp.three_dart_average,mp.highest_checkout,mp.scores_180,mp.legs_won,
@@ -578,7 +596,7 @@ def manifest() -> JSONResponse:
         ],
         "shortcuts": [
             {"name": "New X01 game", "short_name": "X01", "url": "/?go=x01-setup", "icons": [{"src": "/branding/icon-192.png", "sizes": "192x192"}]},
-            {"name": "Training", "short_name": "Training", "url": "/?go=practice-menu", "icons": [{"src": "/branding/icon-192.png", "sizes": "192x192"}]},
+            {"name": "Training Centre", "short_name": "Training", "url": "/?go=practice-menu", "icons": [{"src": "/branding/icon-192.png", "sizes": "192x192"}]},
         ],
     }
     return JSONResponse(payload, headers={"Cache-Control": "no-cache"})
