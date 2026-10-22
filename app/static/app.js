@@ -11,13 +11,23 @@ let practice = null;
 let appSettings = {
   primary_color:'#8ca75b', accent_color:'#b8cf8f', background_color:'#0d0f10',
   panel_color:'#171a1c', text_color:'#f4f6f1', muted_color:'#aeb5ad',
-  font:'modern', keep_awake:true, has_custom_favicon:false
+  font:'modern', keep_awake:true, dartboard_mode:false, has_custom_favicon:false
 };
 let deferredInstallPrompt = null;
 let wakeLock = null;
 let gameplayActive = false;
 let serviceWorkerReady = false;
-const APP_VERSION = '0.6.1';
+const APP_VERSION = '0.7.1';
+const BOT_LEVELS = {
+  beginner:{label:'Beginner',avg:30,checkout:.08},
+  pub:{label:'Pub player',avg:45,checkout:.13},
+  club:{label:'Club player',avg:55,checkout:.19},
+  good:{label:'Good club player',avg:65,checkout:.27},
+  advanced:{label:'Advanced',avg:75,checkout:.35},
+  excellent:{label:'Excellent',avg:85,checkout:.44},
+  pro:{label:'Pro',avg:95,checkout:.54}
+};
+let botTimer=null;
 
 const FONT_STACKS = {
   modern:'Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif',
@@ -39,6 +49,7 @@ function applySettings(settings){
   r.setProperty('--muted',appSettings.muted_color);
   r.setProperty('--font-family',FONT_STACKS[appSettings.font]||FONT_STACKS.modern);
   const meta=$('meta[name="theme-color"]'); if(meta)meta.setAttribute('content',appSettings.primary_color);
+  document.body.classList.toggle('dartboard-enabled',!!appSettings.dartboard_mode);
 }
 async function loadSettings(){
   try{applySettings(await api('/api/settings'));}catch(e){applySettings(appSettings);}
@@ -81,7 +92,7 @@ async function syncWakeLock(){
     wakeLock.addEventListener('release',()=>{wakeLock=null;});
   }catch(e){wakeLock=null;}
 }
-function setGameplayActive(active){ gameplayActive=!!active; syncWakeLock(); }
+function setGameplayActive(active){ gameplayActive=!!active; document.body.classList.toggle('gameplay-active',gameplayActive);if(!gameplayActive)document.body.classList.remove('x01-gameplay');syncWakeLock(); }
 document.addEventListener('visibilitychange',()=>syncWakeLock());
 
 
@@ -142,18 +153,52 @@ function homeCard(e,t,d,go){return `<button class="card click" data-go="${go}" s
 async function playerManager(){
   setGameplayActive(false);
   await loadPlayers();
-  view.innerHTML = `<div class="section-title"><h2>Players</h2><span class="muted">Saved centrally</span></div>
-  <div class="card">
-    <div class="form-grid"><label>New player<input id="newPlayer" maxlength="40" placeholder="Player name"></label></div>
-    <div class="actions" style="justify-content:flex-start"><button class="btn primary" id="addPlayer">Add player</button></div>
-    <div class="player-pills">${players.map(p=>`<span class="pill">${esc(p.name)} <button class="btn danger" data-del="${p.id}" style="padding:2px 7px;margin-left:6px">×</button></span>`).join('') || '<span class="muted">No players yet.</span>'}</div>
-  </div>`;
-  $('#addPlayer').onclick=async()=>{
-    const name=$('#newPlayer').value.trim(); if(!name)return;
-    try{await api('/api/players',{method:'POST',body:JSON.stringify({name})}); await playerManager(); toast('Player added');}catch(e){toast(e.message,2500)}
-  };
-  $$('[data-del]').forEach(b=>b.onclick=async()=>{try{await api('/api/players/'+b.dataset.del,{method:'DELETE'});await playerManager()}catch(e){toast(e.message,2500)}});
+  view.innerHTML = `<div class="section-title"><h2>Players</h2><span class="muted">Tap a player to open their dashboard</span></div>
+  <div class="card"><div class="form-grid"><label>New player<input id="newPlayer" maxlength="40" placeholder="Player name"></label></div><div class="actions" style="justify-content:flex-start"><button class="btn primary" id="addPlayer">Add player</button></div></div>
+  <div class="player-directory">${players.map(p=>`<div class="card player-directory-card" data-player-dashboard="${p.id}" tabindex="0"><div class="player-avatar">${esc(p.name).slice(0,1).toUpperCase()}</div><div class="player-directory-copy"><strong>${esc(p.name)}</strong><div class="muted">Stats, badges, training & recent games</div></div><button class="btn danger player-delete" data-del="${p.id}" title="Delete player">×</button></div>`).join('') || '<div class="card"><span class="muted">No players yet.</span></div>'}</div>`;
+  $('#addPlayer').onclick=async()=>{const name=$('#newPlayer').value.trim();if(!name)return;try{await api('/api/players',{method:'POST',body:JSON.stringify({name})});await playerManager();toast('Player added');}catch(e){toast(e.message,2500)}};
+  $$('[data-player-dashboard]').forEach(c=>{c.onclick=e=>{if(e.target.closest('[data-del]'))return;playerDashboard(+c.dataset.playerDashboard)};c.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();playerDashboard(+c.dataset.playerDashboard);}};});
+  $$('[data-del]').forEach(b=>b.onclick=async e=>{e.stopPropagation();try{await api('/api/players/'+b.dataset.del,{method:'DELETE'});await playerManager()}catch(err){toast(err.message,2500)}});
 }
+function shortDate(value){try{return new Date(value).toLocaleDateString(undefined,{day:'numeric',month:'short',year:'2-digit'});}catch(e){return value||''}}
+function gameLabel(t){return ({x01:'X01',cricket:'Cricket',killer:'Killer',shanghai:'Shanghai',halveit:'Halve-It'})[t]||t;}
+function metricCard(icon,label,value,sub=''){return `<div class="card metric-card"><span>${icon}</span><strong>${value}</strong><small>${label}</small>${sub?`<em>${esc(sub)}</em>`:''}</div>`;}
+function trainingBars(items=[]){
+  if(!items.length)return '<p class="muted">Complete Bob’s 27 sessions to build double-by-double analytics.</p>';
+  return `<div class="double-bars">${items.map(x=>`<div class="double-bar-row"><span>${esc(x.target)}</span><div class="double-track"><i style="width:${Math.max(2,Math.min(100,+x.rate||0))}%"></i></div><strong>${fmt(x.rate,0)}%</strong></div>`).join('')}</div>`;
+}
+async function playerDashboard(playerId){
+  setGameplayActive(false);view.dataset.page='player-dashboard';await loadPlayers();
+  const [data,rows,boards]=await Promise.all([api(`/api/players/${playerId}/profile`),api('/api/stats'),api('/api/leaderboards')]);
+  const awards=buildBadgeAwards(rows,boards).get(+playerId)||[],x=data.x01||{},t=data.training||{},other=players.filter(p=>+p.id!==+playerId);
+  const recent=(data.recent_matches||[]).map(r=>{const won=+r.winner_player_id===+playerId;return `<div class="history-row"><span class="result-pill ${won?'win':'loss'}">${won?'W':'L'}</span><div><strong>${gameLabel(r.game_type)}${r.start_score?` ${r.start_score}`:''}</strong><div class="muted">${shortDate(r.played_at)}${r.winner_name?` · winner ${esc(r.winner_name)}`:''}</div></div><div class="history-stat">${r.game_type==='x01'?`${fmt(r.three_dart_average,1)} avg`:r.legs_won?`${r.legs_won} legs`:''}</div></div>`;}).join('')||'<p class="muted">No recorded games yet.</p>';
+  const party=data.party||{};
+  view.innerHTML=`
+    <div class="section-title"><h2>${esc(data.player.name)}</h2><span class="muted">Player dashboard</span></div>
+    <div class="profile-hero card"><div class="profile-avatar">${esc(data.player.name).slice(0,1).toUpperCase()}</div><div><h2>${esc(data.player.name)}</h2><p class="muted">${x.matches||0} X01 matches · ${x.wins||0} wins · ${x.legs_won||0} legs won</p><div class="badge-wrap">${awards.length?badgeChips(awards):'<span class="muted">No current honours yet</span>'}</div></div></div>
+    <div class="metric-grid">${metricCard('📈','Lifetime avg',fmt(x.lifetime_average,2))}${metricCard('⚡','Best match avg',fmt(x.best_average,2))}${metricCard('💥','180s',x.total_180s||0)}${metricCard('🎯','Highest checkout',x.highest_checkout||0)}${metricCard('🧊','Checkout %',x.checkout_attempts?fmt((x.checkouts/x.checkout_attempts)*100,1)+'%':'—')}${metricCard('🔥','Highest visit',x.highest_visit||0)}</div>
+    <div class="dashboard-grid">
+      <div class="card"><h3>Other games</h3><div class="mini-stat-list"><div><span>🏏 Cricket wins</span><strong>${party.cricket?.wins||0}</strong></div><div><span>👑 Killer wins</span><strong>${party.killer?.wins||0}</strong></div><div><span>🌏 Shanghai best</span><strong>${party.shanghai?.best_score??'—'}</strong></div><div><span>✂️ Halve-It best</span><strong>${party.halveit?.best_score??'—'}</strong></div><div><span>🎯 Bob's 27 best</span><strong>${t.bobs27?.best_score??'—'}</strong></div></div></div>
+      <div class="card"><h3>Head-to-head</h3>${other.length?`<label>Compare with<select id="profileOpponent">${other.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select></label><div class="actions" style="justify-content:flex-start"><button class="btn primary" id="profileCompare">View rivalry</button></div>`:'<p class="muted">Add another player to unlock head-to-head stats.</p>'}</div>
+    </div>
+    <div class="section-title"><h2>Training analytics</h2><span class="muted">Improves as sessions are recorded</span></div>
+    <div class="training-analytics-grid">
+      <div class="card"><h3>🎯 Checkout Trainer</h3><div class="training-big">${t.checkout?.attempts?fmt(t.checkout.rate,1)+'%':'—'}</div><p class="muted">${t.checkout?.hits||0} finishes from ${t.checkout?.attempts||0} attempts · ${t.checkout?.sessions||0} sessions</p></div>
+      <div class="card"><h3>🔢 121</h3><div class="training-big">${t['121']?.best_target||'—'}</div><p class="muted">Best completed target · ${t['121']?.successes||0} successful levels from ${t['121']?.attempts||0} attempts</p></div>
+      <div class="card"><h3>🎯 Bob's 27</h3><div class="training-big">${t.bobs27?.best_score??'—'}</div><p class="muted">Personal best · ${t.bobs27?.sessions||0} recorded sessions</p><h4>Strongest doubles</h4>${trainingBars(t.bobs27?.best_doubles||[])}${t.bobs27?.weak_doubles?.length?`<h4 style="margin-top:14px">Needs work</h4>${trainingBars(t.bobs27.weak_doubles)}`:''}</div>
+    </div>
+    <div class="section-title"><h2>Recent games</h2></div><div class="card history-list">${recent}</div>
+    <div class="actions"><button class="btn" id="backPlayers">Back to players</button><button class="btn" id="backStats">Leaderboards</button></div>`;
+  $('#backPlayers').onclick=playerManager;$('#backStats').onclick=statsView;if($('#profileCompare'))$('#profileCompare').onclick=()=>showHeadToHead(+playerId,+$('#profileOpponent').value);
+}
+async function showHeadToHead(p1Id,p2Id){
+  setGameplayActive(false);view.dataset.page='head-to-head';const d=await api(`/api/head-to-head?player1=${p1Id}&player2=${p2Id}`),[a,b]=d.players;
+  const streak=d.streak?.count?`${d.streak.name} has won the last ${d.streak.count}`:'No current streak';
+  const recent=(d.recent||[]).map(r=>{const pa=r.players.find(x=>+x.player_id===+a.player_id)||{},pb=r.players.find(x=>+x.player_id===+b.player_id)||{};return `<div class="h2h-history"><span>${shortDate(r.played_at)}</span><strong>${pa.legs||0}–${pb.legs||0}</strong><span>${fmt(pa.average,1)} / ${fmt(pb.average,1)} avg</span></div>`;}).join('')||'<p class="muted">No two-player X01 matches recorded between these players yet.</p>';
+  view.innerHTML=`<div class="section-title"><h2>Head-to-head</h2><span class="muted">X01 rivalry</span></div><div class="h2h-hero card"><div><strong>${esc(a.name)}</strong><div class="h2h-wins">${a.wins}</div><span>wins</span></div><div class="h2h-vs">VS<div>${d.matches} matches</div></div><div><strong>${esc(b.name)}</strong><div class="h2h-wins">${b.wins}</div><span>wins</span></div></div><div class="streak-strip">🔥 ${esc(streak)}</div><div class="h2h-table card"><div></div><strong>${esc(a.name)}</strong><strong>${esc(b.name)}</strong>${h2hRow('Legs won',a.legs,b.legs)}${h2hRow('Rivalry avg',fmt(a.average,2),fmt(b.average,2))}${h2hRow('Best match avg',fmt(a.best_average,2),fmt(b.best_average,2))}${h2hRow('Highest checkout',a.highest_checkout,b.highest_checkout)}${h2hRow('180s',a['180s'],b['180s'])}</div><div class="section-title"><h2>Recent meetings</h2></div><div class="card">${recent}</div><div class="actions"><button class="btn" id="h2hBack">Back to stats</button><button class="btn" id="h2hA">${esc(a.name)} dashboard</button><button class="btn" id="h2hB">${esc(b.name)} dashboard</button></div>`;
+  $('#h2hBack').onclick=statsView;$('#h2hA').onclick=()=>playerDashboard(a.player_id);$('#h2hB').onclick=()=>playerDashboard(b.player_id);
+}
+function h2hRow(label,a,b){return `<span>${label}</span><strong>${a}</strong><strong>${b}</strong>`;}
 
 function leaderboardCard(icon,title,rows,unit){
   const medals=['🥇','🥈','🥉'];
@@ -195,8 +240,10 @@ async function statsView(){
   const [rows,boards]=await Promise.all([api('/api/stats'),api('/api/leaderboards')]);
   const awards=buildBadgeAwards(rows,boards);
   const honours=players.map(p=>({p,b:awards.get(+p.id)||[]})).filter(x=>x.b.length);
+  const rivalry=players.length>=2?`<div class="card rivalry-picker"><div><h3>⚔️ Head-to-head</h3><p class="muted">Compare two players using their recorded two-player X01 matches.</p></div><div class="rivalry-controls"><select id="h2hP1">${players.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select><span>vs</span><select id="h2hP2">${players.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select><button class="btn primary" id="openH2H">Compare</button></div></div>`:'';
   view.innerHTML=`
-    <div class="section-title"><h2>Honours & leaderboards</h2><span class="muted">Current leaders keep the badge until somebody beats them</span></div>
+    <div class="section-title"><h2>Head-to-head & honours</h2><span class="muted">Rivalries, current titles and best results</span></div>${rivalry}
+    <div class="section-title"><h2>Honours</h2><span class="muted">Current leaders keep the badge until somebody beats them</span></div>
     ${honours.length?`<div class="honours-grid">${honours.map(x=>`<div class="card honour-card"><h3>${esc(x.p.name)}</h3><div class="badge-wrap">${badgeChips(x.b)}</div></div>`).join('')}</div>`:`<div class="card"><p class="muted">Play some recorded games to start earning DartDeck badges.</p></div>`}
     <div class="section-title"><h2>Game leaderboards</h2><span class="muted">Best recorded results</span></div>
     <div class="leaderboard-grid">
@@ -208,7 +255,10 @@ async function statsView(){
     </div>
     <div class="section-title"><h2>X01 player stats</h2><span class="muted">Recorded X01 history</span></div><div class="card table-wrap"><table>
     <thead><tr><th>Player</th><th>Matches</th><th>Legs</th><th>Avg</th><th>Best Avg</th><th>High CO</th><th>High Visit</th><th>180s</th><th>CO%</th></tr></thead>
-    <tbody>${rows.map(r=>`<tr><td><strong>${esc(r.name)}</strong>${awards.get(+r.id)?.length?`<div class="table-badges">${awards.get(+r.id).map(b=>`<span title="${esc(b.detail)}">${b.icon}</span>`).join('')}</div>`:''}</td><td>${r.matches}</td><td>${r.legs_won}</td><td>${fmt(r.lifetime_average,2)}</td><td>${fmt(r.best_average,2)}</td><td>${r.highest_checkout}</td><td>${r.highest_visit}</td><td>${r.total_180s}</td><td>${r.checkout_attempts?fmt(r.checkouts/r.checkout_attempts*100,0)+'%':'—'}</td></tr>`).join('') || '<tr><td colspan="9" class="muted">No stats recorded yet.</td></tr>'}</tbody></table></div>`;
+    <tbody>${rows.map(r=>`<tr class="click-row" data-profile="${r.id}"><td><strong>${esc(r.name)}</strong>${awards.get(+r.id)?.length?`<div class="table-badges">${awards.get(+r.id).map(b=>`<span title="${esc(b.detail)}">${b.icon}</span>`).join('')}</div>`:''}</td><td>${r.matches}</td><td>${r.legs_won}</td><td>${fmt(r.lifetime_average,2)}</td><td>${fmt(r.best_average,2)}</td><td>${r.highest_checkout}</td><td>${r.highest_visit}</td><td>${r.total_180s}</td><td>${r.checkout_attempts?fmt(r.checkouts/r.checkout_attempts*100,0)+'%':'—'}</td></tr>`).join('') || '<tr><td colspan="9" class="muted">No stats recorded yet.</td></tr>'}</tbody></table></div>`;
+  if($('#h2hP2')&&players.length>1)$('#h2hP2').value=String(players[1].id);
+  $('#openH2H')?.addEventListener('click',()=>{const a=+$('#h2hP1').value,b=+$('#h2hP2').value;if(a===b){toast('Choose two different players');return;}showHeadToHead(a,b);});
+  $$('[data-profile]').forEach(r=>r.onclick=()=>playerDashboard(+r.dataset.profile));
 }
 
 async function settingsView(){
@@ -252,6 +302,7 @@ async function settingsView(){
       <div class="card">
         <h3>During games</h3>
         <div class="toggle-row"><div><strong>Keep screen awake</strong><div class="muted">Prevents the display sleeping while a match or practice session is active.</div></div><input id="keepAwake" type="checkbox" ${appSettings.keep_awake?'checked':''}></div>
+        <div class="toggle-row" style="margin-top:10px"><div><strong>Dartboard Mode</strong><div class="muted">Turns active games into a distraction-free scorer with larger controls and an automatic two-pane landscape layout on tablets.</div></div><input id="dartboardMode" type="checkbox" ${appSettings.dartboard_mode?'checked':''}></div>
         <p class="muted">Wake Lock requires HTTPS (or localhost) and a supported browser.</p>
         <div class="actions" style="justify-content:flex-start"><button class="btn primary" id="saveGameSettings">Save game settings</button></div>
       </div>
@@ -281,7 +332,7 @@ async function settingsView(){
 function colourField(label,id,value){return `<label>${label}<span class="colour-field"><input type="color" id="${id}" value="${value}"><input value="${value}" aria-label="${label} hex colour" data-sync="${id}" maxlength="7"></span></label>`}
 function statusRow(ok,text){return `<div class="status-row"><span class="status-dot ${ok?'ok':'bad'}"></span><span>${text}</span></div>`}
 async function saveSettingsFromForm(){
-  const payload={primary_color:$('#primaryColor').value,accent_color:$('#accentColor').value,background_color:$('#backgroundColor').value,panel_color:$('#panelColor').value,text_color:$('#textColor').value,muted_color:$('#mutedColor').value,font:$('#fontChoice').value,keep_awake:$('#keepAwake').checked};
+  const payload={primary_color:$('#primaryColor').value,accent_color:$('#accentColor').value,background_color:$('#backgroundColor').value,panel_color:$('#panelColor').value,text_color:$('#textColor').value,muted_color:$('#mutedColor').value,font:$('#fontChoice').value,keep_awake:$('#keepAwake').checked,dartboard_mode:$('#dartboardMode').checked};
   appSettings=await api('/api/settings',{method:'PUT',body:JSON.stringify(payload)});applySettings(appSettings);syncWakeLock();
 }
 async function uploadFavicon(){
@@ -313,6 +364,7 @@ async function x01Setup(){
       <label>Out rule<select id="outRule"><option value="double" selected>Double out</option><option value="straight">Straight out</option><option value="master">Master out</option></select></label>
       <label>Legs<select id="legs"><option value="1">1 leg</option><option value="3" selected>Best of 3</option><option value="5">Best of 5</option><option value="7">Best of 7</option></select></label>
       <label>Entry mode<select id="entryMode"><option value="quick" selected>Quick score</option><option value="darts">Dart by dart</option></select></label>
+      <label>DartBot opponent<select id="botLevel"><option value="">None</option>${Object.entries(BOT_LEVELS).map(([k,v])=>`<option value="${k}">${v.label} · ~${v.avg} avg</option>`).join('')}</select></label>
     </div>
     <div id="playerSelects" class="form-grid" style="margin-top:14px"></div>
     <div class="actions"><button class="btn primary big" id="startX01">Start game</button></div>
@@ -325,18 +377,22 @@ async function x01Setup(){
     $$('.xplayer').forEach((el,i)=>{if(selected[i])el.value=String(selected[i]);});
   };
   renderSelects(); $('#playerCount').onchange=renderSelects;
+  $('#botLevel').onchange=()=>{const on=!!$('#botLevel').value;if(on){$('#playerCount').value='1';$('#playerCount').disabled=true;$('#inRule').value='straight';$('#inRule').disabled=true;$('#entryMode').disabled=false;$('#entryMode').value='quick';renderSelects();toast('DartBot matches currently use one human player and straight-in');}else{$('#playerCount').disabled=false;$('#inRule').disabled=false;}};
   $('#inRule').onchange=()=>{ if($('#inRule').value==='double'){ $('#entryMode').value='darts'; $('#entryMode').disabled=true; toast('Double-in uses dart-by-dart entry'); } else $('#entryMode').disabled=false; };
   $('#startX01').onclick=()=>{
     const ids=$$('.xplayer').map(s=>+s.value); if(new Set(ids).size!==ids.length){toast('Choose different players');return;}
+    const botLevel=$('#botLevel').value||null;
+    if(botLevel&&ids.length!==1){toast('DartBot currently plays one human opponent');return;}
     rememberGamePlayers(ids);
-    startX01({start:+$('#startScore').value, ids, doubleIn:$('#inRule').value==='double', out:$('#outRule').value, bestOf:+$('#legs').value, mode:$('#entryMode').value});
+    startX01({start:+$('#startScore').value, ids, doubleIn:$('#inRule').value==='double', out:$('#outRule').value, bestOf:+$('#legs').value, mode:$('#entryMode').value,botLevel});
   };
 }
 
-function basePlayer(p,start){return {id:p.id,name:p.name,score:start,legs:0,in:false,totalScored:0,darts:0,first9Points:0,first9Darts:0,highestVisit:0,highestCheckout:0,attempts:0,checkouts:0,c100:0,c140:0,c180:0,visits:[],legStartScored:0,legStartDarts:0};}
+function basePlayer(p,start){return {id:p.id,name:p.name,score:start,legs:0,in:false,totalScored:0,darts:0,first9Points:0,first9Darts:0,highestVisit:0,highestCheckout:0,attempts:0,checkouts:0,c100:0,c140:0,c180:0,visits:[],legStartScored:0,legStartDarts:0,isBot:!!p.isBot,botLevel:p.botLevel||null};}
 function startX01(cfg){
-  setGameplayActive(true);
+  setGameplayActive(true);document.body.classList.add('x01-gameplay');
   const selected=cfg.ids.map(id=>players.find(p=>p.id===id));
+  if(cfg.botLevel){const b=BOT_LEVELS[cfg.botLevel];selected.push({id:`bot-${cfg.botLevel}`,name:`DartBot · ${b.label}`,isBot:true,botLevel:cfg.botLevel});}
   x01={...cfg, players:selected.map(p=>basePlayer(p,cfg.start)), turn:0, visit:[], mult:1, quick:'', history:[], finished:false, legNo:1, checkoutPending:null,checkoutFallback:false};
   renderX01();
 }
@@ -359,17 +415,14 @@ function renderX01(){
       </div>
     </div>` : '';
   view.innerHTML=`
-  <div class="section-title"><h2>${g.start} · Leg ${g.legNo}</h2><span class="muted">First to ${Math.floor(g.bestOf/2)+1} legs</span></div>
-  <div class="scoreboard">${g.players.map((p,i)=>playerScoreCard(p,i===g.turn,g)).join('')}</div>
-  <div class="checkout">${route ? `<strong>Checkout:</strong> ${route.join(' → ')}` : `<strong>${active.score}</strong> remaining · ${setupSuggestion(active.score,g.out)}`}</div>
-  <div class="card">
-    ${checkoutConfirm}
-    <div class="game-status">${esc(active.name)} to throw ${g.doubleIn&&!active.in?'· needs a double to get in':''}</div>
-    ${g.checkoutPending?'':(g.mode==='quick'?quickInput():dartInput())}
-    <div class="actions">
-      <button class="btn" id="switchInput">${g.checkoutPending?'Enter dart-by-dart instead':g.mode==='quick'?'Dart-by-dart':'Quick score'}</button>
-      <button class="btn" id="undo">Undo last visit</button>
-      <button class="btn danger" id="endGame">End game</button>
+  <div class="section-title x01-title"><h2>${g.start} · Leg ${g.legNo}</h2><span class="muted">First to ${Math.floor(g.bestOf/2)+1} legs</span></div>
+  <div class="x01-shell">
+    <div class="x01-board-pane"><div class="scoreboard">${g.players.map((p,i)=>playerScoreCard(p,i===g.turn,g)).join('')}</div><div class="checkout">${route ? `<strong>Checkout:</strong> ${route.join(' → ')}` : `<strong>${active.score}</strong> remaining · ${setupSuggestion(active.score,g.out)}`}</div></div>
+    <div class="card x01-entry-pane">
+      ${checkoutConfirm}
+      <div class="game-status">${esc(active.name)} to throw ${g.doubleIn&&!active.in?'· needs a double to get in':''}</div>
+      ${g.checkoutPending?'':(active.isBot?`<div class="bot-turn"><div class="bot-avatar">🤖</div><strong>DartBot is throwing…</strong><span>${BOT_LEVELS[active.botLevel]?.label||'Opponent'} · target avg ${BOT_LEVELS[active.botLevel]?.avg||'—'}</span></div>`:(g.mode==='quick'?quickInput():dartInput()))}
+      <div class="actions x01-secondary-actions"><button class="btn" id="switchInput">${g.checkoutPending?'Enter dart-by-dart instead':g.mode==='quick'?'Dart-by-dart':'Quick score'}</button><button class="btn" id="undo">Undo last visit</button><button class="btn danger" id="endGame">End game</button></div>
     </div>
   </div>`;
   bindX01();
@@ -403,6 +456,7 @@ function bindX01(){
     x01.mode=x01.mode==='quick'?'darts':'quick'; x01.quick=''; x01.visit=[]; renderX01();
   };
   $('#undo').onclick=undoX01; $('#endGame').onclick=()=>{if(confirm('End this game without saving?')) route('home')};
+  if(x01.players[x01.turn].isBot){scheduleDartBot();return;}
   if(x01.mode==='quick'){
     $$('[data-key]').forEach(b=>b.onclick=()=>{const k=b.dataset.key;if(k==='C')x01.quick='';else if(k==='⌫')x01.quick=x01.quick.slice(0,-1);else if(x01.quick.length<3)x01.quick+=k; $('#quickTotal').textContent=x01.quick||'—';});
     $('#missQuick').onclick=()=>{x01.quick='';commitVisit({score:0,darts:3,finishDarts:null,labels:['Miss'],dartObjs:null});};
@@ -440,7 +494,7 @@ function addDart(seg,m){
   x01.visit.push({seg,m,score,label,isDouble,isTriple}); renderX01();
 }
 function snapshot(){return JSON.stringify({players:x01.players,turn:x01.turn,legNo:x01.legNo});}
-function undoX01(){if(!x01.history.length){toast('Nothing to undo');return;}const s=JSON.parse(x01.history.pop());x01.players=s.players;x01.turn=s.turn;x01.legNo=s.legNo;x01.quick='';x01.visit=[];x01.checkoutPending=null;x01.checkoutFallback=false;renderX01();}
+function undoX01(){if(botTimer){clearTimeout(botTimer);botTimer=null;}if(!x01.history.length){toast('Nothing to undo');return;}const s=JSON.parse(x01.history.pop());x01.players=s.players;x01.turn=s.turn;x01.legNo=s.legNo;x01.quick='';x01.visit=[];x01.checkoutPending=null;x01.checkoutFallback=false;renderX01();}
 
 function commitVisit(v){
   const g=x01, p=g.players[g.turn], before=p.score; g.history.push(snapshot());
@@ -488,10 +542,13 @@ function startNextLeg(){const g=x01;g.legNo++;g.turn=(g.legNo-1)%g.players.lengt
 async function finishMatch(winner){
   setGameplayActive(false);
   const g=x01; g.finished=true;
-  const payload={game_type:'x01',start_score:g.start,winner_player_id:winner.id,settings_json:JSON.stringify({doubleIn:g.doubleIn,out:g.out,bestOf:g.bestOf}),players:g.players.map((p,i)=>({player_id:p.id,finishing_position:p.id===winner.id?1:2,darts_thrown:p.darts,points_scored:p.totalScored,three_dart_average:p.darts?p.totalScored*3/p.darts:0,first_nine_average:0,highest_visit:p.highestVisit,highest_checkout:p.highestCheckout,checkout_attempts:p.attempts,checkouts:p.checkouts,scores_100_plus:p.c100,scores_140_plus:p.c140,scores_180:p.c180,legs_won:p.legs}))};
+  const humans=g.players.filter(p=>!p.isBot);const payload={game_type:'x01',start_score:g.start,winner_player_id:winner.isBot?null:winner.id,settings_json:JSON.stringify({doubleIn:g.doubleIn,out:g.out,bestOf:g.bestOf,botLevel:g.botLevel||null}),players:humans.map(p=>({player_id:p.id,finishing_position:p.id===winner.id?1:2,darts_thrown:p.darts,points_scored:p.totalScored,three_dart_average:p.darts?p.totalScored*3/p.darts:0,first_nine_average:0,highest_visit:p.highestVisit,highest_checkout:p.highestCheckout,checkout_attempts:p.attempts,checkouts:p.checkouts,scores_100_plus:p.c100,scores_140_plus:p.c140,scores_180:p.c180,legs_won:p.legs}))};
   try{await api('/api/matches',{method:'POST',body:JSON.stringify(payload)});}catch(e){toast('Could not save match: '+e.message,3000)}
-  view.innerHTML=`<div class="card"><div class="target-big">🏆</div><h2 style="text-align:center">${esc(winner.name)} wins ${winner.legs}–${Math.max(...g.players.filter(p=>p.id!==winner.id).map(p=>p.legs),0)}</h2><div class="table-wrap"><table><thead><tr><th>Player</th><th>Avg</th><th>High Visit</th><th>High CO</th><th>180s</th><th>CO%</th></tr></thead><tbody>${g.players.map(p=>`<tr><td>${esc(p.name)}</td><td>${fmt(p.darts?p.totalScored*3/p.darts:0,1)}</td><td>${p.highestVisit}</td><td>${p.highestCheckout}</td><td>${p.c180}</td><td>${p.attempts?fmt(p.checkouts/p.attempts*100,0)+'%':'—'}</td></tr>`).join('')}</tbody></table></div><div class="actions"><button class="btn primary" id="again">Play again</button><button class="btn" id="home">Home</button></div></div>`;
-  $('#again').onclick=()=>x01Setup(); $('#home').onclick=home;
+  const runner=Math.max(...g.players.filter(p=>p.id!==winner.id).map(p=>p.legs),0);
+  const wavg=winner.darts?winner.totalScored*3/winner.darts:0;
+  view.innerHTML=`<div class="card result-hero result-complete"><div class="result-crown">🏆</div><span class="eyebrow">MATCH COMPLETE</span><h2>${esc(winner.name)} wins ${winner.legs}–${runner}</h2><div class="finish-highlight-grid"><div><strong>${fmt(wavg,1)}</strong><span>Match avg</span></div><div><strong>${winner.highestCheckout||0}</strong><span>High checkout</span></div><div><strong>${winner.c180||0}</strong><span>180s</span></div><div><strong>${winner.highestVisit||0}</strong><span>High visit</span></div></div></div><div class="card table-wrap finish-table"><table><thead><tr><th>Player</th><th>Legs</th><th>Avg</th><th>High Visit</th><th>High CO</th><th>180s</th><th>CO%</th></tr></thead><tbody>${g.players.map(p=>`<tr><td><strong>${esc(p.name)}</strong></td><td>${p.legs}</td><td>${fmt(p.darts?p.totalScored*3/p.darts:0,1)}</td><td>${p.highestVisit}</td><td>${p.highestCheckout}</td><td>${p.c180}</td><td>${p.attempts?fmt(p.checkouts/p.attempts*100,0)+'%':'—'}</td></tr>`).join('')}</tbody></table></div><div class="actions finish-actions"><button class="btn primary big" id="rematch">Rematch</button><button class="btn" id="newGame">New game</button>${!winner.isBot?`<button class="btn" id="winnerProfile">${esc(winner.name)} profile</button>`:''}${humans.length===2&&!g.botLevel?`<button class="btn" id="finishH2H">Head-to-head</button>`:''}<button class="btn" id="home">Home</button></div>`;
+  $('#rematch').onclick=()=>startX01({start:g.start,ids:g.players.filter(p=>!p.isBot).map(p=>p.id),doubleIn:g.doubleIn,out:g.out,bestOf:g.bestOf,mode:g.doubleIn?'darts':'quick',botLevel:g.botLevel||null});
+  $('#newGame').onclick=()=>x01Setup();$('#home').onclick=home;if($('#winnerProfile'))$('#winnerProfile').onclick=()=>playerDashboard(winner.id);if($('#finishH2H'))$('#finishH2H').onclick=()=>showHeadToHead(humans[0].id,humans[1].id);
 }
 
 const dartsForCheckout = (()=>{
@@ -565,6 +622,40 @@ function setupSuggestion(score,out){
   return best?`Setup: ${best.route.join(' → ')} · leaves ${best.leave}`:'Build a finish and avoid bogey numbers';
 }
 
+
+function gaussian(mean,sd){
+  let u=0,v=0;while(!u)u=Math.random();while(!v)v=Math.random();return mean+sd*Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*v);
+}
+let botVisitTotals=null;
+function plausibleVisitTotals(){
+  if(botVisitTotals)return botVisitTotals;
+  const vals=[0,...new Set(dartsForCheckout.map(d=>d.score))],set=new Set();
+  for(const a of vals)for(const b of vals)for(const c of vals){const n=a+b+c;if(n<=180)set.add(n);}
+  botVisitTotals=[...set].sort((a,b)=>a-b);return botVisitTotals;
+}
+function nearestPlausibleVisit(desired,max,remaining,out){
+  const vals=plausibleVisitTotals().filter(n=>n<=max&&n!==remaining&&!(out==='double'&&remaining-n===1));
+  if(!vals.length)return 0;return vals.reduce((best,n)=>Math.abs(n-desired)<Math.abs(best-desired)?n:best,vals[0]);
+}
+function scheduleDartBot(){
+  if(botTimer||!x01||x01.finished||!x01.players[x01.turn]?.isBot)return;
+  botTimer=setTimeout(()=>{botTimer=null;runDartBotTurn();},650);
+}
+function runDartBotTurn(){
+  const g=x01;if(!g||g.finished)return;const p=g.players[g.turn];if(!p?.isBot)return;
+  const cfg=BOT_LEVELS[p.botLevel]||BOT_LEVELS.club;
+  const route=getCheckout(p.score,g.out);
+  if(route&&Math.random()<cfg.checkout){
+    commitVisit({score:p.score,darts:route.length,finishDarts:route.length,labels:route,dartObjs:null,checkoutConfirmed:true});
+    return;
+  }
+  let max=Math.min(180,Math.max(0,p.score-(g.out==='double'?2:1)));
+  let desired=Math.round(gaussian(cfg.avg,Math.max(16,34-cfg.avg/5)));
+  if(Math.random()<0.08+cfg.avg/800)desired=[100,121,125,140,180][Math.floor(Math.random()*5)];
+  const score=nearestPlausibleVisit(desired,max,p.score,g.out);
+  commitVisit({score,darts:3,finishDarts:null,labels:[String(score)],dartObjs:null});
+}
+
 function partyMenu(){
   setGameplayActive(false);
   const games=[
@@ -617,7 +708,7 @@ async function partySetup(type){
 }
 function partyName(t){return ({cricket:'Cricket',killer:'Killer',shanghai:'Shanghai',halveit:'Halve-It'})[t]}
 function startParty(type,ids,rounds,killerNumbers=[]){
-  setGameplayActive(true);
+  setGameplayActive(true);document.body.classList.remove('x01-gameplay');
   const ps=ids.map(id=>players.find(p=>p.id===id));
   party={type,rounds,turn:0,round:1,darts:0,mult:1,quick:'',visit:[],finished:false,players:ps.map((p,i)=>({id:p.id,name:p.name,score:0,lives:rounds,killer:false,number:killerNumbers[i]||i+1,marks:{15:0,16:0,17:0,18:0,19:0,20:0,25:0}}))};
   renderParty();
@@ -692,8 +783,9 @@ async function partyWinner(p,extra=''){
   const key=partyRecordKey(g.type),record=key?(boards[key]||[])[0]:null;
   const recordHtml=record?`<div class="record-strip"><span>🏆 ${partyName(g.type)} high score</span><strong>${esc(record.name)} · ${Number(record.value).toLocaleString()}</strong></div>`:'';
   const scores=['cricket','shanghai','halveit','killer'].includes(g.type)?finishScoreTable(g):'';
-  view.innerHTML=`<div class="card result-hero"><div class="target-big">🏆</div><h2>${esc(p.name)} wins!</h2>${extra?`<p class="muted">${extra}</p>`:''}${recordHtml}</div>${scores}<div class="actions"><button class="btn primary" id="againP">Play again</button><button class="btn" id="homeP">Home</button></div>`;
-  $('#againP').onclick=()=>partySetup(g.type);$('#homeP').onclick=home;
+  const winMetric=g.type==='killer'?`${p.lives} ${p.lives===1?'life':'lives'} left`:`${p.score} pts`;
+  view.innerHTML=`<div class="card result-hero result-complete"><div class="result-crown">🏆</div><span class="eyebrow">${partyName(g.type).toUpperCase()} COMPLETE</span><h2>${esc(p.name)} wins!</h2><div class="finish-highlight-grid single"><div><strong>${winMetric}</strong><span>Winning result</span></div></div>${extra?`<p class="muted">${extra}</p>`:''}${recordHtml}</div>${scores}<div class="actions finish-actions"><button class="btn primary big" id="againP">Rematch</button><button class="btn" id="newP">New ${partyName(g.type)} game</button><button class="btn" id="partyProfile">${esc(p.name)} profile</button><button class="btn" id="homeP">Home</button></div>`;
+  $('#againP').onclick=()=>startParty(g.type,g.players.map(x=>x.id),g.rounds,g.type==='killer'?g.players.map(x=>x.number):[]);$('#newP').onclick=()=>partySetup(g.type);$('#partyProfile').onclick=()=>playerDashboard(p.id);$('#homeP').onclick=home;
 }
 
 function renderCricket(){
@@ -802,94 +894,57 @@ function practiceMenu(){
   $$('[data-practice]').forEach(b=>b.onclick=()=>practiceSetup(b.dataset.practice));
 }
 async function practiceSetup(mode){
-  setGameplayActive(false);
-  await loadPlayers(); if(!players.length){route('players');return;}
-  view.innerHTML=`<div class="section-title"><h2>${practiceName(mode)}</h2></div><div class="card"><div class="form-grid"><label>Player<select id="pracPlayer">${players.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select></label></div><div class="actions"><button class="btn primary big" id="startPractice">Start</button></div></div>`;
-  const remembered=lastTrainingPlayerId(); if(remembered)$('#pracPlayer').value=String(remembered);
+  setGameplayActive(false);await loadPlayers();if(!players.length){route('players');return;}
+  view.innerHTML=`<div class="section-title"><h2>${practiceName(mode)}</h2><span class="muted">Training session</span></div><div class="card"><div class="form-grid"><label>Player<select id="pracPlayer">${players.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select></label></div><div id="trainingSnapshot" class="training-snapshot"></div><div class="actions"><button class="btn primary big" id="startPractice">Start</button></div></div>`;
+  const remembered=lastTrainingPlayerId();if(remembered)$('#pracPlayer').value=String(remembered);
+  const snapshot=async()=>{const id=+$('#pracPlayer').value,el=$('#trainingSnapshot');el.innerHTML='<span class="muted">Loading training history…</span>';try{const a=await api(`/api/training-analytics/${id}`);if(mode==='checkout')el.innerHTML=`<strong>${a.checkout.attempts?fmt(a.checkout.rate,1)+'%':'No recorded sessions yet'}</strong><span>Checkout success · ${a.checkout.hits} from ${a.checkout.attempts} attempts</span>`;if(mode==='121')el.innerHTML=`<strong>${a['121'].best_target||'No recorded target yet'}</strong><span>Best completed target · ${a['121'].sessions} sessions</span>`;if(mode==='bobs27')el.innerHTML=`<strong>${a.bobs27.best_score||'No recorded score yet'}</strong><span>Personal best${a.bobs27.best_doubles?.length?` · strongest ${a.bobs27.best_doubles[0].target} (${fmt(a.bobs27.best_doubles[0].rate,0)}%)`:''}</span>`;}catch(e){el.innerHTML='<span class="muted">No training history available.</span>';}};
+  $('#pracPlayer').onchange=snapshot;await snapshot();
   $('#startPractice').onclick=()=>{const id=+$('#pracPlayer').value;rememberTrainingPlayer(id);startPractice(mode,id);};
 }
 function practiceName(m){return ({checkout:'Checkout Trainer','121':'121',bobs27:"Bob's 27"})[m]}
 function startPractice(mode,playerId){
-  setGameplayActive(true);
-  const p=players.find(x=>x.id===playerId);
-  practice={mode,player:p,round:1,score:mode==='bobs27'?27:0,target:mode==='121'?121:mode==='checkout'?randomCheckout():1,remaining:mode==='121'?121:0,hits:0,attempts:0,targetVisit:1,quick:'',checkoutPending:false,busted:false,lastTarget:null};
+  setGameplayActive(true);document.body.classList.remove('x01-gameplay');const p=players.find(x=>x.id===playerId);
+  practice={mode,player:p,round:1,score:mode==='bobs27'?27:0,target:mode==='121'?121:mode==='checkout'?randomCheckout():1,remaining:mode==='121'?121:0,hits:0,attempts:0,targetVisit:1,quick:'',checkoutPending:false,busted:false,lastTarget:null,targetHits:{}};
   renderPractice();
 }
 function randomCheckout(){const choices=[];for(let n=40;n<=170;n++)if(getCheckout(n,'double'))choices.push(n);return choices[Math.floor(Math.random()*choices.length)];}
-function renderPractice(){
-  const g=practice;
-  if(g.mode==='checkout')return renderCheckoutTrainer();
-  if(g.mode==='121')return render121();
-  if(g.mode==='bobs27')return renderBobs27();
-}
+function renderPractice(){const g=practice;if(g.mode==='checkout')return renderCheckoutTrainer();if(g.mode==='121')return render121();if(g.mode==='bobs27')return renderBobs27();}
 function renderCheckoutTrainer(){
-  const g=practice;
-  view.innerHTML=`<div class="section-title"><h2>${practiceName(g.mode)}</h2><span class="muted">Round ${g.round}</span></div><div class="card"><div class="target-big">${g.target}</div><div class="checkout"><strong>Route:</strong> ${(getCheckout(g.target,'double')||['No route']).join(' → ')}</div><p class="muted" style="text-align:center">Did you finish it within 3 darts?</p><div class="actions"><button class="btn primary big" data-pr="hit">Checkout ✓</button><button class="btn big" data-pr="miss">Miss</button></div><p class="game-status">${g.hits} checkouts from ${g.attempts} attempts</p></div>`;
-  $$('[data-pr]').forEach(b=>b.onclick=()=>{g.attempts++;if(b.dataset.pr==='hit')g.hits++;g.target=randomCheckout();g.round++;renderPractice();});
+  const g=practice,rate=g.attempts?g.hits*100/g.attempts:0;
+  view.innerHTML=`<div class="section-title"><h2>${practiceName(g.mode)}</h2><span class="muted">Round ${g.round}</span></div><div class="card"><div class="target-big">${g.target}</div><div class="checkout"><strong>Route:</strong> ${(getCheckout(g.target,'double')||['No route']).join(' → ')}</div><p class="muted" style="text-align:center">Did you finish it within 3 darts?</p><div class="actions"><button class="btn primary big" data-pr="hit">Checkout ✓</button><button class="btn big" data-pr="miss">Miss</button></div><div class="training-live"><strong>${fmt(rate,1)}%</strong><span>${g.hits} checkouts from ${g.attempts} attempts</span></div><div class="actions"><button class="btn" id="endTraining">End session</button></div></div>`;
+  $$('[data-pr]').forEach(b=>b.onclick=()=>{g.attempts++;if(b.dataset.pr==='hit')g.hits++;g.target=randomCheckout();g.round++;renderPractice();});$('#endTraining').onclick=finishPractice;
 }
-function practiceQuickPad(prefix,value,label='Enter visit score'){
-  return partyQuickPad(prefix,value,label);
-}
+function practiceQuickPad(prefix,value,label='Enter visit score'){return partyQuickPad(prefix,value,label);}
 function bindPracticeQuickPad(prefix,state,onSubmit){bindPartyQuickPad(prefix,state,onSubmit);}
 function render121(){
-  const g=practice,dartsLeft=(4-g.targetVisit)*3;
-  const routeNow=g.remaining<=170?(getCheckout(g.remaining,'double')||null):null;
-  const pending=g.checkoutPending?`<div class="checkout-confirm"><div class="checkout-confirm-icon">🎯</div><div><strong>Did that visit finish on a double?</strong><p>You entered <b>${g.checkoutPending.score}</b> from ${g.checkoutPending.from}. Quick scoring can keep the tally, but it cannot tell whether your last dart was a double.</p><div class="actions" style="justify-content:flex-start"><button class="btn primary" id="p121Yes">Yes — checkout ✓</button><button class="btn" id="p121No">No — bust</button></div></div></div>`:'';
+  const g=practice,dartsLeft=(4-g.targetVisit)*3,routeNow=g.remaining<=170?(getCheckout(g.remaining,'double')||null):null;
+  const pending=g.checkoutPending?`<div class="checkout-confirm"><div class="checkout-confirm-icon">🎯</div><div><strong>Did that visit finish on a double?</strong><p>You entered <b>${g.checkoutPending.score}</b> from ${g.checkoutPending.from}. Quick scoring keeps the tally without making you remember the exact darts.</p><div class="actions" style="justify-content:flex-start"><button class="btn primary" id="p121Yes">Yes — checkout ✓</button><button class="btn" id="p121No">No — bust</button></div></div></div>`:'';
   const entry=g.checkoutPending?'':`<div class="card"><p class="muted" style="text-align:center">Enter the total scored with your next three darts. DartDeck keeps the running total for all three visits.</p>${practiceQuickPad('p121',g.quick,'Visit score')}</div>`;
-  view.innerHTML=`<div class="section-title"><h2>121</h2><span class="muted">Attempt ${g.round}</span></div><div class="training-score-grid"><div class="target-focus"><span>ATTEMPT TARGET</span><strong>${g.target}</strong></div><div class="target-focus"><span>REMAINING</span><strong>${g.remaining}</strong></div></div><div class="practice-progress"><strong>Visit ${g.targetVisit} of 3</strong><span>${dartsLeft} darts remaining</span></div>${routeNow?`<div class="checkout"><strong>Checkout:</strong> ${routeNow.join(' → ')}</div>`:`<div class="checkout"><strong>Setup:</strong> ${suggestSetup(g.remaining)}</div>`}${pending}${entry}<p class="game-status">${g.hits} successful checkouts from ${g.attempts} completed attempts</p>`;
-  if(g.checkoutPending){
-    $('#p121Yes').onclick=()=>complete121(true);
-    $('#p121No').onclick=()=>{g.checkoutPending=false;toast('Bust — score restored');advance121Visit();};
-  } else {
-    bindPracticeQuickPad('p121',g,n=>submit121Visit(n));
-  }
+  view.innerHTML=`<div class="section-title"><h2>121</h2><span class="muted">Attempt ${g.round}</span></div><div class="training-score-grid"><div class="target-focus"><span>ATTEMPT TARGET</span><strong>${g.target}</strong></div><div class="target-focus"><span>REMAINING</span><strong>${g.remaining}</strong></div></div><div class="practice-progress"><strong>Visit ${g.targetVisit} of 3</strong><span>${dartsLeft} darts remaining</span></div>${routeNow?`<div class="checkout"><strong>Checkout:</strong> ${routeNow.join(' → ')}</div>`:`<div class="checkout"><strong>Setup:</strong> ${suggestSetup(g.remaining)}</div>`}${pending}${entry}<div class="training-live"><strong>${g.hits?g.target-1:'—'}</strong><span>Best target this session · ${g.hits} successful levels / ${g.attempts} completed attempts</span></div><div class="actions"><button class="btn" id="endTraining">End session</button></div>`;
+  if(g.checkoutPending){$('#p121Yes').onclick=()=>complete121(true);$('#p121No').onclick=()=>{g.checkoutPending=false;toast('Bust — score restored');advance121Visit();};}else bindPracticeQuickPad('p121',g,n=>submit121Visit(n));$('#endTraining').onclick=finishPractice;
 }
-function submit121Visit(n){
-  const g=practice,before=g.remaining;
-  g.quick='';
-  const left=before-n;
-  if(left<0||left===1){toast('Bust — score restored');advance121Visit();return;}
-  if(left===0){g.checkoutPending={from:before,score:n};render121();return;}
-  g.remaining=left;advance121Visit();
-}
-function advance121Visit(){
-  const g=practice;g.checkoutPending=false;g.quick='';
-  if(g.targetVisit<3){g.targetVisit++;render121();return;}
-  g.attempts++;g.round++;g.targetVisit=1;g.remaining=g.target;
-  toast(`${g.target} not finished in 9 darts — try it again`,2400);render121();
-}
-function complete121(success){
-  const g=practice;g.checkoutPending=false;g.quick='';
-  if(!success){advance121Visit();return;}
-  g.hits++;g.attempts++;const done=g.target;g.target++;g.remaining=g.target;g.round++;g.targetVisit=1;
-  toast(`Checked out ${done} — next target ${g.target}`,2200);render121();
-}
+function submit121Visit(n){const g=practice,before=g.remaining;g.quick='';const left=before-n;if(left<0||left===1){toast('Bust — score restored');advance121Visit();return;}if(left===0){g.checkoutPending={from:before,score:n};render121();return;}g.remaining=left;advance121Visit();}
+function advance121Visit(){const g=practice;g.checkoutPending=false;g.quick='';if(g.targetVisit<3){g.targetVisit++;render121();return;}g.attempts++;g.round++;g.targetVisit=1;g.remaining=g.target;toast(`${g.target} not finished in 9 darts — try it again`,2400);render121();}
+function complete121(success){const g=practice;g.checkoutPending=false;g.quick='';if(!success){advance121Visit();return;}g.hits++;g.attempts++;const done=g.target;g.target++;g.remaining=g.target;g.round++;g.targetVisit=1;toast(`Checked out ${done} — next target ${g.target}`,2200);render121();}
 function renderBobs27(){
   const g=practice,targetLabel=g.target===21?'Bull':'D'+g.target,doubleValue=g.target===21?50:g.target*2;
-  view.innerHTML=`<div class="section-title"><h2>Bob's 27</h2><span class="muted">Score ${g.score}</span></div><div class="game-help"><strong>D1 → D20 → Bull</strong><span>Three darts at each double. Every hit adds the double’s value; miss all three and that value is subtracted. Reach zero or below and the game ends.</span></div><div class="training-score-grid"><div class="target-focus target-focus-large"><span>CURRENT TARGET · ${g.target} OF 21</span><strong>${targetLabel}</strong></div><div class="target-focus"><span>CURRENT SCORE</span><strong>${g.score}</strong></div></div><div class="card"><p class="muted" style="text-align:center">How many of your three darts hit <b>${targetLabel}</b>? ${targetLabel==='Bull'?'Each inner Bull hit is worth 50.':`Each hit is worth ${doubleValue}.`}</p><div class="hit-count-grid">${[0,1,2,3].map(n=>`<button class="${n?'primary':''}" data-bobhit="${n}"><strong>${n}</strong><span>${n===1?'hit':'hits'}</span></button>`).join('')}</div></div>`;
-  $$('[data-bobhit]').forEach(b=>b.onclick=()=>bob27Visit(+b.dataset.bobhit));
+  view.innerHTML=`<div class="section-title"><h2>Bob's 27</h2><span class="muted">Score ${g.score}</span></div><div class="game-help"><strong>D1 → D20 → Bull</strong><span>Three darts at each double. Every hit adds the double’s value; miss all three and that value is subtracted. Reach zero or below and the game ends.</span></div><div class="training-score-grid"><div class="target-focus target-focus-large"><span>CURRENT TARGET · ${g.target} OF 21</span><strong>${targetLabel}</strong></div><div class="target-focus"><span>CURRENT SCORE</span><strong>${g.score}</strong></div></div><div class="card"><p class="muted" style="text-align:center">How many of your three darts hit <b>${targetLabel}</b>? ${targetLabel==='Bull'?'Each inner Bull hit is worth 50.':`Each hit is worth ${doubleValue}.`}</p><div class="hit-count-grid">${[0,1,2,3].map(n=>`<button class="${n?'primary':''}" data-bobhit="${n}"><strong>${n}</strong><span>${n===1?'hit':'hits'}</span></button>`).join('')}</div><div class="actions"><button class="btn" id="endTraining">End session</button></div></div>`;
+  $$('[data-bobhit]').forEach(b=>b.onclick=()=>bob27Visit(+b.dataset.bobhit));$('#endTraining').onclick=finishPractice;
 }
-function bob27Visit(hits){
-  const g=practice,targetLabel=g.target===21?'Bull':'D'+g.target,doubleValue=g.target===21?50:g.target*2;
-  g.hits+=hits;g.attempts+=3;g.lastTarget=targetLabel;
-  g.score+=hits>0?doubleValue*hits:-doubleValue;
-  if(g.score<=0){g.busted=true;finishPractice();return;}
-  if(g.target===21){finishPractice();return;}
-  g.target++;renderBobs27();
-}
+function bob27Visit(hits){const g=practice,targetLabel=g.target===21?'Bull':'D'+g.target,doubleValue=g.target===21?50:g.target*2,key=g.target===21?'25':String(g.target);g.targetHits[key]=hits;g.hits+=hits;g.attempts+=3;g.lastTarget=targetLabel;g.score+=hits>0?doubleValue*hits:-doubleValue;if(g.score<=0){g.busted=true;finishPractice();return;}if(g.target===21){finishPractice();return;}g.target++;renderBobs27();}
 async function finishPractice(){
-  setGameplayActive(false);
-  const g=practice;
-  if(g.mode!=='bobs27'){route('practice-menu');return;}
-  const score=g.score,detail={hits:g.hits,darts:g.attempts,last_target:g.lastTarget,busted:g.busted};
+  setGameplayActive(false);const g=practice;let score=0,detail={};
+  if(g.mode==='checkout'){score=g.attempts?g.hits*100/g.attempts:0;detail={hits:g.hits,attempts:g.attempts};}
+  if(g.mode==='121'){score=g.hits?g.target-1:0;detail={hits:g.hits,attempts:g.attempts,current_target:g.target};}
+  if(g.mode==='bobs27'){score=g.score;detail={hits:g.hits,darts:g.attempts,last_target:g.lastTarget,busted:g.busted,target_hits:g.targetHits};}
   try{await api('/api/practice',{method:'POST',body:JSON.stringify({player_id:g.player.id,mode:g.mode,score,details_json:JSON.stringify(detail)})});}catch(e){toast('Result could not be saved',2600);}
-  let boards={};try{boards=await api('/api/leaderboards');}catch(e){}
-  const record=(boards.bobs27||[])[0];
-  const recordHtml=record?`<div class="record-strip"><span>🏆 Bob's 27 high score</span><strong>${esc(record.name)} · ${Number(record.value).toLocaleString()}</strong></div>`:'';
-  const title=g.busted?'Game over':'Bob’s 27 complete';
-  const detailText=g.busted?`You went out at ${g.lastTarget}. Final score: ${g.score}`:`You made it from D1 through Bull. Final score: ${g.score}`;
-  view.innerHTML=`<div class="card result-hero"><div class="target-big">${g.busted?'×':'✓'}</div><h2>${title}</h2><p class="muted">${detailText}</p>${recordHtml}</div><div class="actions"><button class="btn primary" id="pracAgain">Again</button><button class="btn" id="pracHome">Home</button></div>`;
-  $('#pracAgain').onclick=()=>practiceSetup(g.mode);$('#pracHome').onclick=home;
+  let analytics={};try{analytics=await api(`/api/training-analytics/${g.player.id}`);}catch(e){}
+  let title='',summary='',metrics='';
+  if(g.mode==='checkout'){title='Checkout session complete';summary=`${g.hits} finishes from ${g.attempts} attempts`;metrics=`<div class="finish-highlight-grid"><div><strong>${g.attempts?fmt(g.hits*100/g.attempts,1)+'%':'—'}</strong><span>Session rate</span></div><div><strong>${analytics.checkout?.rate?fmt(analytics.checkout.rate,1)+'%':'—'}</strong><span>All-time rate</span></div></div>`;}
+  if(g.mode==='121'){title='121 session complete';summary=g.hits?`Reached and completed ${g.target-1}`:'No level completed this session';metrics=`<div class="finish-highlight-grid"><div><strong>${g.hits?g.target-1:'—'}</strong><span>Session best</span></div><div><strong>${analytics['121']?.best_target||'—'}</strong><span>Personal best</span></div></div>`;}
+  if(g.mode==='bobs27'){title=g.busted?'Bob’s 27 — game over':'Bob’s 27 complete';summary=g.busted?`Out at ${g.lastTarget} · final score ${g.score}`:`Made it from D1 through Bull · final score ${g.score}`;metrics=`<div class="finish-highlight-grid"><div><strong>${g.score}</strong><span>Final score</span></div><div><strong>${analytics.bobs27?.best_score||g.score}</strong><span>Personal best</span></div></div>${analytics.bobs27?.best_doubles?.length?`<div class="card training-finish-detail"><h3>Strongest doubles</h3>${trainingBars(analytics.bobs27.best_doubles)}</div>`:''}`;}
+  view.innerHTML=`<div class="card result-hero result-complete"><div class="result-crown">🎯</div><span class="eyebrow">TRAINING SAVED</span><h2>${title}</h2><p class="muted">${summary}</p>${metrics}</div><div class="actions finish-actions"><button class="btn primary big" id="pracAgain">Again</button><button class="btn" id="pracProfile">Player dashboard</button><button class="btn" id="pracMenu">Training</button><button class="btn" id="pracHome">Home</button></div>`;
+  $('#pracAgain').onclick=()=>startPractice(g.mode,g.player.id);$('#pracProfile').onclick=()=>playerDashboard(g.player.id);$('#pracMenu').onclick=practiceMenu;$('#pracHome').onclick=home;
 }
 
 async function route(name){

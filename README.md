@@ -1,4 +1,4 @@
-# DartDeck v0.6.1
+# DartDeck v0.7.1
 
 A self-hosted darts scoring and practice PWA for Docker / Portainer.
 
@@ -13,13 +13,17 @@ A self-hosted darts scoring and practice PWA for Docker / Portainer.
 - Checkout suggestions and setup-shot advice
 - Live 3-dart average, first-9 display, high visit, 100+/140+/180 counters
 - Saved players and X01 history in SQLite
-- Lifetime player stats
+- Rich player dashboards with X01, party-game and training stats
+- Two-player X01 head-to-head rivalry stats and streaks
 - Party games: Cricket, Killer, Shanghai, Halve-It
 - Training modes: Checkout Trainer, 121 (9 darts / 3 visits with quick-score tally), Bob's 27 (D1–D20 then Bull)
 - Custom theme colours and font choice
 - Uploadable app icon / favicon, automatically resized for the browser and PWA
 - Installable PWA manifest with 192px / 512px icons and iOS home-screen icon
 - Optional Screen Wake Lock while a game or practice session is active
+- Optional Dartboard Mode with distraction-free scoring and tablet landscape layout
+- DartBot X01 opponent with seven skill levels
+- Saved Checkout Trainer / 121 sessions and Bob's 27 double-by-double analytics
 - In-app PWA diagnostics / install status
 
 ## Portainer / Docker deployment
@@ -77,6 +81,7 @@ Open **Settings** in DartDeck to change:
 - Muted text colour
 - Font style
 - Keep-screen-awake behaviour
+- Dartboard Mode
 - App icon / favicon
 
 Theme and branding settings are stored centrally in the same persistent Docker data volume, so they are shared by all devices using DartDeck.
@@ -132,7 +137,7 @@ Rebuilding or replacing the DartDeck container does not remove this data as long
 ## Notes
 
 - Double-in is intentionally forced to dart-by-dart input because DartDeck needs to know which dart opened the leg.
-- A finishing visit in double-out/master-out also needs dart-by-dart input so the final dart can be validated. When a quick-score entry would finish the leg, DartDeck now keeps a persistent confirmation panel on screen while you enter the finishing darts.
+- Quick Score checkouts ask how many darts the finish took; exact dart-by-dart entry remains available when you want to record the route.
 
 
 ## Updating from v0.4.0
@@ -173,3 +178,17 @@ Redeploy/rebuild the container, then reload DartDeck once. Existing data in the 
 - Impossible dart counts are disabled based on the minimum valid checkout route.
 - Exact dart-by-dart checkout entry remains available as an optional fallback.
 - Quick Score returns to normal automatically after checkout confirmation.
+
+
+## v0.7.1 additions
+
+- Rich player dashboards with badges, X01 career stats, party-game records, recent results and training analytics.
+- Head-to-head X01 rivalry view with match wins, legs, averages, 180s, highest checkout, recent meetings and current streak. Only true two-player matches count toward rivalry stats.
+- Improved end-of-game screens with stronger summaries, direct rematch, player-dashboard links and final score tables.
+- Dartboard Mode: hides navigation during active play, enlarges scoring controls and automatically uses a two-pane X01 layout on landscape tablets.
+- DartBot for one-human X01 games, with seven levels from Beginner (~30 avg) to Pro (~95 avg) and separate checkout ability. DartBot currently uses straight-in.
+- Checkout Trainer and 121 sessions can now be ended and saved.
+- Bob's 27 records hits per double, allowing player dashboards to show strongest doubles over time.
+- Training setup screens show the selected player's relevant history before starting a session.
+
+Existing SQLite data remains compatible; the new analytics build on recorded history as new training sessions are saved.

@@ -30,11 +30,12 @@ DEFAULT_SETTINGS = {
     "muted_color": "#aeb5ad",
     "font": "modern",
     "keep_awake": True,
+    "dartboard_mode": False,
 }
 ALLOWED_FONTS = {"modern", "system", "rounded", "condensed", "classic", "mono"}
 HEX_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 
-app = FastAPI(title="DartDeck", version="0.6.1")
+app = FastAPI(title="DartDeck", version="0.7.1")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
@@ -153,6 +154,7 @@ class SettingsIn(BaseModel):
     muted_color: str
     font: str
     keep_awake: bool = True
+    dartboard_mode: bool = False
 
 
 def load_settings() -> dict[str, Any]:
@@ -163,7 +165,7 @@ def load_settings() -> dict[str, Any]:
         key = row["key"]
         if key not in result:
             continue
-        if key == "keep_awake":
+        if key in {"keep_awake", "dartboard_mode"}:
             result[key] = row["value"].lower() == "true"
         else:
             result[key] = row["value"]
@@ -372,6 +374,156 @@ def _wins_leaderboard(conn: sqlite3.Connection, game_type: str, limit: int = 100
         (game_type, limit),
     ).fetchall()
     return [dict(r) for r in rows]
+
+
+
+def _json_obj(raw: str | None) -> dict[str, Any]:
+    try:
+        value = json.loads(raw or "{}")
+        return value if isinstance(value, dict) else {}
+    except Exception:
+        return {}
+
+
+def _player_x01_summary(conn: sqlite3.Connection, player_id: int) -> dict[str, Any]:
+    row = conn.execute(
+        """
+        SELECT
+            COUNT(DISTINCT mp.match_id) AS matches,
+            SUM(CASE WHEN m.winner_player_id=? THEN 1 ELSE 0 END) AS wins,
+            COALESCE(SUM(mp.legs_won),0) AS legs_won,
+            COALESCE(SUM(mp.darts_thrown),0) AS darts_thrown,
+            COALESCE(SUM(mp.points_scored),0) AS points_scored,
+            ROUND(CASE WHEN SUM(mp.darts_thrown)>0 THEN SUM(mp.points_scored)*3.0/SUM(mp.darts_thrown) ELSE 0 END,2) AS lifetime_average,
+            ROUND(COALESCE(MAX(mp.three_dart_average),0),2) AS best_average,
+            COALESCE(MAX(mp.highest_checkout),0) AS highest_checkout,
+            COALESCE(MAX(mp.highest_visit),0) AS highest_visit,
+            COALESCE(SUM(mp.scores_180),0) AS total_180s,
+            COALESCE(SUM(mp.checkouts),0) AS checkouts,
+            COALESCE(SUM(mp.checkout_attempts),0) AS checkout_attempts
+        FROM match_players mp
+        JOIN matches m ON m.id=mp.match_id AND m.game_type='x01'
+        WHERE mp.player_id=?
+        """,
+        (player_id, player_id),
+    ).fetchone()
+    return dict(row) if row else {}
+
+
+@app.get("/api/players/{player_id}/profile")
+def player_profile(player_id: int) -> dict[str, Any]:
+    with db() as conn:
+        player = conn.execute("SELECT id,name,created_at FROM players WHERE id=?", (player_id,)).fetchone()
+        if not player:
+            raise HTTPException(404, "Player not found")
+        x01 = _player_x01_summary(conn, player_id)
+        party_rows = conn.execute(
+            """
+            SELECT m.game_type,
+                   SUM(CASE WHEN m.winner_player_id=? THEN 1 ELSE 0 END) AS wins,
+                   MAX(mp.points_scored) AS best_score,
+                   COUNT(*) AS games
+            FROM match_players mp JOIN matches m ON m.id=mp.match_id
+            WHERE mp.player_id=? AND m.game_type IN ('cricket','killer','shanghai','halveit')
+            GROUP BY m.game_type
+            """,
+            (player_id, player_id),
+        ).fetchall()
+        party = {r["game_type"]: dict(r) for r in party_rows}
+        practice_rows = conn.execute(
+            "SELECT mode,score,details_json,played_at FROM practice_results WHERE player_id=? ORDER BY played_at DESC",
+            (player_id,),
+        ).fetchall()
+        practice_summary: dict[str, Any] = {
+            "checkout": {"sessions":0,"hits":0,"attempts":0,"rate":0},
+            "121": {"sessions":0,"best_target":0,"successes":0,"attempts":0,"rate":0},
+            "bobs27": {"sessions":0,"best_score":0,"best_doubles":[],"weak_doubles":[]},
+        }
+        double_hits = {str(i): [0,0] for i in list(range(1,21))+[25]}
+        for r in practice_rows:
+            mode=r["mode"]; detail=_json_obj(r["details_json"])
+            if mode=='checkout':
+                z=practice_summary['checkout']; z['sessions']+=1; z['hits']+=int(detail.get('hits',0)); z['attempts']+=int(detail.get('attempts',0))
+            elif mode=='121':
+                z=practice_summary['121']; z['sessions']+=1; z['best_target']=max(z['best_target'],int(round(r['score'] or 0))); z['successes']+=int(detail.get('hits',0)); z['attempts']+=int(detail.get('attempts',0))
+            elif mode=='bobs27':
+                z=practice_summary['bobs27']; z['sessions']+=1; z['best_score']=max(z['best_score'],int(round(r['score'] or 0)))
+                for key,val in (detail.get('target_hits') or {}).items():
+                    if str(key) in double_hits:
+                        double_hits[str(key)][0]+=int(val); double_hits[str(key)][1]+=3
+        for key in ('checkout','121'):
+            z=practice_summary[key]; z['rate']=round(z['hits' if key=='checkout' else 'successes']*100/z['attempts'],1) if z['attempts'] else 0
+        doubles=[]
+        for key,(hits,darts) in double_hits.items():
+            if darts:
+                label='Bull' if key=='25' else f'D{key}'
+                doubles.append({"target":label,"hits":hits,"darts":darts,"rate":round(hits*100/darts,1)})
+        practice_summary['bobs27']['best_doubles']=sorted(doubles,key=lambda x:(-x['rate'],-x['hits'],x['target']))[:5]
+        practice_summary['bobs27']['weak_doubles']=sorted(doubles,key=lambda x:(x['rate'],x['hits'],x['target']))[:5]
+        recent_matches = conn.execute(
+            """
+            SELECT m.id,m.game_type,m.start_score,m.winner_player_id,m.played_at,mp.three_dart_average,mp.highest_checkout,mp.scores_180,mp.legs_won,
+                   wp.name AS winner_name
+            FROM match_players mp JOIN matches m ON m.id=mp.match_id
+            LEFT JOIN players wp ON wp.id=m.winner_player_id
+            WHERE mp.player_id=? ORDER BY m.played_at DESC LIMIT 10
+            """,
+            (player_id,),
+        ).fetchall()
+        recent_practice = [{"mode":r["mode"],"score":r["score"],"played_at":r["played_at"],"details":_json_obj(r["details_json"])} for r in practice_rows[:10]]
+    return {"player":dict(player),"x01":x01,"party":party,"training":practice_summary,"recent_matches":[dict(r) for r in recent_matches],"recent_practice":recent_practice}
+
+
+@app.get("/api/head-to-head")
+def head_to_head(player1: int, player2: int) -> dict[str, Any]:
+    if player1 == player2:
+        raise HTTPException(400, "Choose two different players")
+    with db() as conn:
+        names = conn.execute("SELECT id,name FROM players WHERE id IN (?,?)", (player1,player2)).fetchall()
+        if len(names) != 2:
+            raise HTTPException(404, "Player not found")
+        name_map={r['id']:r['name'] for r in names}
+        match_ids = conn.execute(
+            """
+            SELECT m.id
+            FROM matches m JOIN match_players mp ON mp.match_id=m.id
+            WHERE m.game_type='x01'
+            GROUP BY m.id
+            HAVING COUNT(*)=2 AND SUM(CASE WHEN mp.player_id IN (?,?) THEN 1 ELSE 0 END)=2
+            ORDER BY m.played_at DESC
+            """, (player1,player2)
+        ).fetchall()
+        ids=[r['id'] for r in match_ids]
+        summaries={player1:{"player_id":player1,"name":name_map[player1],"wins":0,"legs":0,"darts":0,"points":0,"average":0,"best_average":0,"highest_checkout":0,"180s":0},player2:{"player_id":player2,"name":name_map[player2],"wins":0,"legs":0,"darts":0,"points":0,"average":0,"best_average":0,"highest_checkout":0,"180s":0}}
+        recent=[]
+        if ids:
+            placeholders=','.join('?'*len(ids))
+            rows=conn.execute(f"""
+                SELECT m.id,m.winner_player_id,m.played_at,m.start_score,mp.player_id,mp.legs_won,mp.darts_thrown,mp.points_scored,mp.three_dart_average,mp.highest_checkout,mp.scores_180
+                FROM matches m JOIN match_players mp ON mp.match_id=m.id
+                WHERE m.id IN ({placeholders}) ORDER BY m.played_at DESC,m.id DESC
+            """, ids).fetchall()
+            by_match={}
+            for r in rows:
+                s=summaries[r['player_id']]; s['legs']+=r['legs_won'] or 0; s['darts']+=r['darts_thrown'] or 0; s['points']+=r['points_scored'] or 0; s['best_average']=max(s['best_average'],r['three_dart_average'] or 0); s['highest_checkout']=max(s['highest_checkout'],r['highest_checkout'] or 0); s['180s']+=r['scores_180'] or 0
+                if r['winner_player_id']==r['player_id']: s['wins']+=1
+                by_match.setdefault(r['id'],{"id":r['id'],"played_at":r['played_at'],"start_score":r['start_score'],"winner_player_id":r['winner_player_id'],"players":[]})['players'].append({"player_id":r['player_id'],"name":name_map[r['player_id']],"legs":r['legs_won'] or 0,"average":round(r['three_dart_average'] or 0,1),"highest_checkout":r['highest_checkout'] or 0,"180s":r['scores_180'] or 0})
+            recent=list(by_match.values())[:8]
+            for s in summaries.values(): s['average']=round(s['points']*3/s['darts'],2) if s['darts'] else 0; s['best_average']=round(s['best_average'],2)
+        streak={"player_id":None,"name":None,"count":0}
+        if recent and recent[0]['winner_player_id'] in summaries:
+            wid=recent[0]['winner_player_id']; count=0
+            for m in recent:
+                if m['winner_player_id']==wid: count+=1
+                else: break
+            streak={"player_id":wid,"name":name_map[wid],"count":count}
+    return {"matches":len(ids),"players":[summaries[player1],summaries[player2]],"streak":streak,"recent":recent}
+
+
+@app.get("/api/training-analytics/{player_id}")
+def training_analytics(player_id: int) -> dict[str, Any]:
+    profile=player_profile(player_id)
+    return profile["training"]
 
 
 @app.get("/api/leaderboards")
