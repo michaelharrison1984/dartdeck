@@ -1,41 +1,47 @@
-# DartDeck v0.8.2 — Clean Local-First Docker/PWA
+# DartDeck 0.9.0
 
-DartDeck v0.8.2 is the clean public/local-first build. It adds a device-specific Last Backup indicator to the existing v0.8.1 local-first design.
+One DartDeck codebase for **Docker/PWA and Android**.
 
-## Storage model
+DartDeck is an offline-first darts scoring, competition and training app. Version 0.9.0 consolidates the former Docker v0.8.x and Android Mobile 0.1.x projects into one repository so game rules, DartBot, profiles, Head-to-Head, Training Centre, themes and future localisation are changed once and shipped to both platforms.
 
-- Players, matches, head-to-head history, leaderboards and Training Centre data are stored locally in IndexedDB in each browser/PWA.
-- The Docker container serves the application only. It does not store DartDeck player or match history.
-- Every device/browser gets its own private DartDeck database.
-- Full backup export plus Import & Merge / Import & Replace remain available under Settings → Data & backup.
+## Repository layout
 
-## Last Backup indicator
+```text
+dartdeck/
+├── src/                    # Shared DartDeck app + local data layer
+│   ├── app.js
+│   ├── store.js
+│   ├── styles.css
+│   ├── index.html
+│   └── icons/
+├── assets/                 # Master native icon/splash assets
+├── scripts/
+│   ├── build.mjs           # Builds Web or Android web assets
+│   └── smoke-test.mjs
+├── .github/workflows/
+│   ├── android-debug.yml
+│   └── docker-check.yml
+├── Dockerfile
+├── docker-compose.yml
+├── capacitor.config.json
+└── package.json
+```
 
-Settings → Data & backup now shows the last date/time this device exported a DartDeck backup. The timestamp is stored locally on that device and is deliberately not imported from backup files. If no backup has been exported, DartDeck displays a backup recommendation.
+## Important upgrade note for existing Docker/PWA users
 
-## Upgrading from v0.8.0 / v0.8.1
+DartDeck 0.9.0 keeps the IndexedDB database name **`dartdeck-local`**.
 
-If you already copied the old server history into the workshop tablet, redeploying v0.8.2 at the **same URL/domain/port** preserves that local browser database. The migration controls simply disappear.
+To retain existing v0.8.x players, matches, stats, Head-to-Head and Training Centre history:
 
-Before upgrading, an Export Backup is strongly recommended.
+1. Deploy 0.9.0 at the **same scheme + hostname + port** as the current DartDeck installation.
+2. Do not clear site data in the browser/PWA.
+3. Export a DartDeck backup before upgrading as an additional safeguard.
 
-Do not clear browser/site data, change the DartDeck hostname/domain/port, or uninstall the PWA unless you have a backup. Those actions can make the local database unavailable to the new origin/profile.
+The Docker container no longer owns match data. Each browser/PWA installation owns its own local data.
 
-The old Docker named volume is no longer mounted or required by this compose file. Removing the mount does not itself erase the browser data already stored on the tablet.
+## Docker / Portainer
 
-## Sharing DartDeck
-
-Friends opening your DartDeck URL start with a clean local database on their own device. They cannot access or migrate the old workshop server history. Their players, games and statistics remain local to their browser/device.
-
-## Backup
-
-Settings → Data & backup provides:
-
-- **Export backup** — saves a portable DartDeck JSON backup.
-- **Import & merge** — adds records from a backup while keeping existing local history.
-- **Import & replace** — replaces the local device database with the selected backup.
-
-## Docker deployment
+The external port remains 8788:
 
 ```yaml
 services:
@@ -47,4 +53,81 @@ services:
     restart: unless-stopped
 ```
 
-No DartDeck data volume is required in v0.8.2.
+Build locally:
+
+```bash
+docker compose up -d --build
+```
+
+Then open `http://YOUR-SERVER:8788` or your existing HTTPS reverse-proxy URL.
+
+No Docker data volume is required.
+
+## Android via GitHub Actions
+
+The repository contains `.github/workflows/android-debug.yml`.
+
+After pushing to GitHub:
+
+1. Open **Actions**.
+2. Select **Build Android debug APK**.
+3. Choose **Run workflow**.
+4. Download the `DartDeck-0.9.0-debug-apk` artifact.
+5. The APK inside is `app-debug.apk`.
+
+The Android application ID remains `com.dartdeck.app`.
+
+### Test APK signing warning
+
+GitHub debug builds use a temporary Gradle debug signing key. A build from a different runner may not install over an older debug APK. Android may require the old test APK to be uninstalled first, which also removes that app's local data.
+
+Before public/beta distribution we should establish a stable signing key and native backup/SQLite strategy. Do **not** use a disposable debug key for the eventual Play Store release.
+
+## Local Android development
+
+Requires Node 24+, Java 21 and a current Android SDK/Android Studio.
+
+Windows helper:
+
+```powershell
+./scripts/setup-android.ps1
+```
+
+Or manually:
+
+```bash
+npm install
+npm run build:mobile
+npx cap add android
+npx cap sync android
+npx capacitor-assets generate --android
+npx cap open android
+```
+
+## Shared development
+
+Make feature changes in `src/`, not separate platform copies.
+
+Validate both outputs:
+
+```bash
+npm test
+```
+
+Build only the web/PWA assets:
+
+```bash
+npm run build:web
+```
+
+Build only the Android/Capacitor assets:
+
+```bash
+npm run build:mobile
+```
+
+## Data
+
+Both platforms are local-first. DartDeck currently uses IndexedDB named `dartdeck-local` for player, match, practice and settings data.
+
+The Web/PWA edition includes JSON Export / Import & Merge / Import & Replace and the Last Backup indicator. Android retains the same underlying local data model, with native backup and native SQLite planned as the next mobile foundation work.

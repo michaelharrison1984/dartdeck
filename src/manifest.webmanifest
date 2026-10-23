@@ -1,0 +1,19 @@
+{
+  "id": "/",
+  "name": "DartDeck",
+  "short_name": "DartDeck",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0d0f10",
+  "theme_color": "#9bc56a",
+  "description": "Offline-first darts scoring, competition and training",
+  "icons": [
+    {"src":"/icons/icon-192.png","sizes":"192x192","type":"image/png","purpose":"any maskable"},
+    {"src":"/icons/icon-512.png","sizes":"512x512","type":"image/png","purpose":"any maskable"}
+  ],
+  "shortcuts": [
+    {"name":"Quick Game","short_name":"Quick Game","url":"/?screen=x01"},
+    {"name":"Training Centre","short_name":"Training","url":"/?screen=training"}
+  ]
+}

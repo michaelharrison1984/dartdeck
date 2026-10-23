@@ -1,0 +1,8 @@
+{
+  "appId": "com.dartdeck.app",
+  "appName": "DartDeck",
+  "webDir": "dist/mobile",
+  "server": {
+    "androidScheme": "https"
+  }
+}

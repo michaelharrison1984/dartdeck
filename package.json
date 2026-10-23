@@ -1,0 +1,28 @@
+{
+  "name": "dartdeck",
+  "version": "0.9.0",
+  "private": true,
+  "description": "DartDeck - offline-first darts scoring, competition and training for Web/PWA and Android",
+  "scripts": {
+    "build:web": "node scripts/build.mjs web",
+    "build:mobile": "node scripts/build.mjs mobile",
+    "build": "npm run build:web && npm run build:mobile",
+    "test": "npm run build && node scripts/smoke-test.mjs && node --check src/app.js && node --check src/store.js",
+    "android:add": "npm run build:mobile && npx cap add android",
+    "android:sync": "npm run build:mobile && npx cap sync android",
+    "android:open": "npm run android:sync && npx cap open android",
+    "android:run": "npm run build:mobile && npx cap run android",
+    "ios:add": "npm run build:mobile && npx cap add ios",
+    "ios:sync": "npm run build:mobile && npx cap sync ios",
+    "ios:open": "npm run ios:sync && npx cap open ios"
+  },
+  "dependencies": {
+    "@capacitor/android": "8.5.3",
+    "@capacitor/core": "8.5.3",
+    "@capacitor/ios": "8.5.3"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "8.5.3",
+    "@capacitor/assets": "3.0.5"
+  }
+}
