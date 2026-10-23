@@ -7,7 +7,7 @@ services:
     volumes:
       - dartdeck_data:/data
     environment:
-      - DARTDECK_DB=/data/dartdeck.db
+      - DARTDECK_LEGACY_DB=/data/dartdeck.db
     restart: unless-stopped
 
 volumes:

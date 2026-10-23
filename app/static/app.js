@@ -9,15 +9,40 @@ let party = null;
 let practice = null;
 
 let appSettings = {
-  primary_color:'#8ca75b', accent_color:'#b8cf8f', background_color:'#0d0f10',
+  theme_id:'midnight', primary_color:'#9bc56a', accent_color:'#c4df9a', background_color:'#0d0f10',
   panel_color:'#171a1c', text_color:'#f4f6f1', muted_color:'#aeb5ad',
-  font:'modern', keep_awake:true, dartboard_mode:false, has_custom_favicon:false
+  font:'modern', keep_awake:true, dartboard_mode:true, has_custom_favicon:false
 };
 let deferredInstallPrompt = null;
 let wakeLock = null;
 let gameplayActive = false;
 let serviceWorkerReady = false;
-const APP_VERSION = '0.7.2';
+const APP_VERSION = '0.8.0 · Local-first Docker';
+const IS_NATIVE_MOBILE = false;
+const USE_LOCAL_STORE = !!window.DartDeckLocalStore;
+const MOBILE_UX = IS_NATIVE_MOBILE || USE_LOCAL_STORE;
+const THEME_PRESETS = {
+  midnight:{label:'Midnight',bg:'#0d0f10',panel:'#171a1c',text:'#f4f6f1',muted:'#aeb5ad',dark:true},
+  carbon:{label:'Carbon',bg:'#111214',panel:'#202226',text:'#f5f5f2',muted:'#aaaeb3',dark:true},
+  board:{label:'Board Green',bg:'#0d1713',panel:'#16251e',text:'#f1f5ef',muted:'#a7b6ad',dark:true},
+  navy:{label:'Night Blue',bg:'#0d1320',panel:'#182235',text:'#f4f7fb',muted:'#a9b5c8',dark:true},
+  light:{label:'Oche Light',bg:'#f3f4ef',panel:'#ffffff',text:'#172019',muted:'#667068',dark:false}
+};
+const ACCENT_OPTIONS=['#9bc56a','#e05e5e','#f0b85a','#5aa9e6','#8f7ae5','#d66bb1'];
+function adjustHex(hex,amount){
+  const n=parseInt(String(hex).replace('#',''),16);if(!Number.isFinite(n))return hex;
+  const c=[(n>>16)&255,(n>>8)&255,n&255].map(v=>Math.max(0,Math.min(255,Math.round(v+(amount>=0?(255-v)*amount:v*amount)))));
+  return '#'+c.map(v=>v.toString(16).padStart(2,'0')).join('');
+}
+function accentContrast(hex){
+  const n=parseInt(String(hex).replace('#',''),16),r=(n>>16)&255,g=(n>>8)&255,b=n&255;
+  return ((r*299+g*587+b*114)/1000)>150?'#101411':'#ffffff';
+}
+function resolveMobileTheme(settings){
+  const preset=THEME_PRESETS[settings.theme_id]||THEME_PRESETS.midnight;
+  const accent=settings.primary_color||'#9bc56a';
+  return {...settings,theme_id:settings.theme_id||'midnight',primary_color:accent,accent_color:adjustHex(accent,preset.dark ? .28 : -.20),background_color:preset.bg,panel_color:preset.panel,text_color:preset.text,muted_color:preset.muted,dartboard_mode:true};
+}
 const BOT_LEVELS = {
   beginner:{label:'Beginner',avg:30,checkout:.08},
   pub:{label:'Pub player',avg:45,checkout:.13},
@@ -40,25 +65,28 @@ const FONT_STACKS = {
 
 function applySettings(settings){
   appSettings={...appSettings,...settings};
+  if(MOBILE_UX) appSettings=resolveMobileTheme(appSettings);
   const r=document.documentElement.style;
   r.setProperty('--accent',appSettings.primary_color);
   r.setProperty('--accent-2',appSettings.accent_color);
+  r.setProperty('--accent-contrast',accentContrast(appSettings.primary_color));
   r.setProperty('--bg',appSettings.background_color);
   r.setProperty('--panel',appSettings.panel_color);
   r.setProperty('--text',appSettings.text_color);
   r.setProperty('--muted',appSettings.muted_color);
   r.setProperty('--font-family',FONT_STACKS[appSettings.font]||FONT_STACKS.modern);
-  const meta=$('meta[name="theme-color"]'); if(meta)meta.setAttribute('content',appSettings.primary_color);
-  document.body.classList.toggle('dartboard-enabled',!!appSettings.dartboard_mode);
+  const meta=$('meta[name="theme-color"]'); if(meta)meta.setAttribute('content',appSettings.background_color);
+  document.body.classList.toggle('dartboard-enabled',MOBILE_UX||!!appSettings.dartboard_mode);
 }
 async function loadSettings(){
   try{applySettings(await api('/api/settings'));}catch(e){applySettings(appSettings);}
 }
 function refreshBrandIcon(){
   const stamp=Date.now();
-  $$('.brand-icon').forEach(i=>i.src=`/branding/icon-64.png?v=${stamp}`);
-  const icon=$('link[rel="icon"]'); if(icon)icon.href=`/branding/icon-64.png?v=${stamp}`;
-  const apple=$('link[rel="apple-touch-icon"]'); if(apple)apple.href=`/branding/icon-180.png?v=${stamp}`;
+  const base=MOBILE_UX?'/static/icons':'/branding';
+  $$('.brand-icon').forEach(i=>i.src=`${base}/icon-64.png?v=${stamp}`);
+  const icon=$('link[rel="icon"]'); if(icon)icon.href=`${base}/icon-64.png?v=${stamp}`;
+  const apple=$('link[rel="apple-touch-icon"]'); if(apple)apple.href=`${base}/icon-180.png?v=${stamp}`;
 }
 function isStandalone(){ return window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone===true; }
 function updateInstallButton(){
@@ -66,6 +94,7 @@ function updateInstallButton(){
   b.classList.toggle('hidden', !deferredInstallPrompt || isStandalone());
 }
 async function installPwa(){
+  if(IS_NATIVE_MOBILE){toast('DartDeck is installed as a native app');return;}
   if(isStandalone()){toast('DartDeck is already installed');return;}
   if(!deferredInstallPrompt){
     const ios=/iphone|ipad|ipod/i.test(navigator.userAgent);
@@ -92,11 +121,13 @@ async function syncWakeLock(){
     wakeLock.addEventListener('release',()=>{wakeLock=null;});
   }catch(e){wakeLock=null;}
 }
-function setGameplayActive(active){ gameplayActive=!!active; document.body.classList.toggle('gameplay-active',gameplayActive);if(!gameplayActive)document.body.classList.remove('x01-gameplay');syncWakeLock(); }
+function setGameplayActive(active){ gameplayActive=!!active; document.body.classList.toggle('gameplay-active',gameplayActive);if(MOBILE_UX)document.body.classList.toggle('dartboard-enabled',true);if(!gameplayActive){document.body.classList.remove('x01-gameplay');if(botTimer){clearTimeout(botTimer);botTimer=null;}if(x01)x01.botReveal=null;}syncWakeLock(); }
 document.addEventListener('visibilitychange',()=>syncWakeLock());
 
 
 const api = async (url, options={}) => {
+  if(USE_LOCAL_STORE) return window.DartDeckLocalStore.request(url, options);
+  if(IS_NATIVE_MOBILE) return window.DartDeckMobileStore.request(url, options);
   const res = await fetch(url, {headers:{'Content-Type':'application/json'}, ...options});
   if (!res.ok) throw new Error((await res.json().catch(()=>({detail:'Request failed'}))).detail || 'Request failed');
   return res.json();
@@ -145,7 +176,7 @@ function home(){
       ${homeCard('📊','Stats','Leaderboards, badges, averages, 180s and checkout data.','stats')}
     </div>
     <div class="section-title"><h2>Designed for the oche</h2></div>
-    <div class="card"><p class="muted">Large touch targets, fast score entry, undo support, checkout routes and installable PWA support. Your players and match history are stored in the Docker volume.</p></div>`;
+    <div class="card"><p class="muted">Large touch targets, fast score entry, undo support, checkout routes and installable PWA support. Your players, match history and training data are stored locally on this device.</p></div>`;
   $$('[data-go]').forEach(b=>b.onclick=()=>route(b.dataset.go));
 }
 function homeCard(e,t,d,go){return `<button class="card click" data-go="${go}" style="text-align:left;color:inherit"><div class="emoji">${e}</div><h2>${t}</h2><p class="muted">${d}</p></button>`}
@@ -263,6 +294,7 @@ async function statsView(){
 }
 
 async function settingsView(){
+  if(MOBILE_UX) return mobileSettingsView();
   setGameplayActive(false);
   view.dataset.page='settings';
   await loadSettings();
@@ -330,6 +362,101 @@ async function settingsView(){
   $('#resetFavicon').onclick=resetFavicon;
   $('#installFromSettings').onclick=installPwa;
 }
+
+async function mobileSettingsView(){
+  setGameplayActive(false);view.dataset.page='settings';await loadSettings();
+  const wake=('wakeLock' in navigator),secure=window.isSecureContext,standalone=isStandalone();
+  const themeId=appSettings.theme_id||'midnight';
+  const localSummary=USE_LOCAL_STORE?await window.DartDeckLocalStore.summary():null;
+  const storagePersistent=USE_LOCAL_STORE&&navigator.storage?.persisted?await navigator.storage.persisted().catch(()=>false):false;
+  let legacy={available:false};
+  if(USE_LOCAL_STORE){try{const r=await fetch('/api/migration/status',{cache:'no-store'});if(r.ok)legacy=await r.json();}catch(e){}}
+  const installText=standalone?'Installed':deferredInstallPrompt?'Install DartDeck':secure?'Install prompt not currently offered':'HTTPS required for installation';
+  view.innerHTML=`
+    <div class="section-title"><h2>Settings</h2><span class="muted">Appearance, gameplay & local data</span></div>
+    <div class="settings-grid">
+      <div class="card">
+        <h3>Theme</h3>
+        <p class="muted">Choose a complete DartDeck theme, then personalise it with one accent colour.</p>
+        <div class="theme-preset-grid">${Object.entries(THEME_PRESETS).map(([id,t])=>`<button class="theme-preset ${id===themeId?'selected':''}" data-theme="${id}" style="--preview-bg:${t.bg};--preview-panel:${t.panel};--preview-text:${t.text}"><span class="theme-mini"><i></i><b></b><em></em></span><strong>${t.label}</strong></button>`).join('')}</div>
+        <h4 class="settings-subhead">Accent colour</h4>
+        <div class="accent-picker">${ACCENT_OPTIONS.map(c=>`<button class="accent-swatch ${c.toLowerCase()===String(appSettings.primary_color).toLowerCase()?'selected':''}" data-accent="${c}" style="--swatch:${c}" aria-label="Use ${c}"></button>`).join('')}<label class="custom-accent">Custom<input type="color" id="mobileAccent" value="${appSettings.primary_color}"></label></div>
+        <label style="margin-top:14px">Font<select id="fontChoice"><option value="modern">Modern</option><option value="system">System</option><option value="rounded">Rounded</option><option value="condensed">Condensed</option></select></label>
+        <div class="settings-preview" id="themePreview" style="margin-top:12px"><span class="muted">Preview</span><div class="sample-score">501</div><strong>Checkout: T20 → T19 → D12</strong></div>
+        <div class="actions"><button class="btn primary" id="saveMobileAppearance">Save appearance</button></div>
+      </div>
+      <div class="card">
+        <h3>During games</h3>
+        <div class="toggle-row"><div><strong>Keep screen awake</strong><div class="muted">Prevents the display sleeping while a match or training session is active where the browser supports it.</div></div><input id="keepAwake" type="checkbox" ${appSettings.keep_awake?'checked':''}></div>
+        <div class="mode-default-note"><span>🎯</span><div><strong>Dartboard View is the default</strong><p>Menus disappear during every game and Training Centre session. Use the in-game End/Exit control to return.</p></div></div>
+        <div class="actions" style="justify-content:flex-start"><button class="btn primary" id="saveMobileGameSettings">Save game settings</button></div>
+      </div>
+      ${USE_LOCAL_STORE?`<div class="card data-card">
+        <h3>Data & backup</h3>
+        <p class="muted">This device owns its DartDeck history. The Docker server only serves the app and, during migration, exposes your old database read-only.</p>
+        <div class="data-summary">
+          <div><strong>${localSummary.players}</strong><span>Players</span></div><div><strong>${localSummary.matches}</strong><span>Matches</span></div><div><strong>${localSummary.practice}</strong><span>Training</span></div><div><strong>${localSummary.total_180s}</strong><span>180s</span></div>
+        </div>
+        <div class="actions data-actions"><button class="btn primary" id="exportBackup">Export backup</button><label class="btn file-btn">Choose backup<input id="backupFile" type="file" accept="application/json,.json,.dartdeck"></label></div>
+        <div class="actions data-actions"><button class="btn" id="mergeBackup" disabled>Import & merge</button><button class="btn danger" id="replaceBackup" disabled>Import & replace</button></div>
+        <p class="muted small-note">Merge keeps existing history and skips records already imported. Replace clears this device first.</p>
+      </div>
+      <div class="card migration-card">
+        <h3>Existing server history</h3>
+        ${legacy.available?`<p>Your old shared database is still available as a <strong>read-only migration source</strong>.</p><div class="data-summary"><div><strong>${legacy.players}</strong><span>Players</span></div><div><strong>${legacy.matches}</strong><span>Matches</span></div><div><strong>${legacy.practice}</strong><span>Training</span></div><div><strong>${legacy.total_180s}</strong><span>180s</span></div></div><div class="actions"><button class="btn primary big" id="migrateLegacy">Copy server history to this device</button><a class="btn" href="/api/migration/database" download>Download original DB</a></div><p class="muted small-note">Safe to run again: previously copied matches and training sessions are skipped. The server database is never modified.</p>`:`<p class="muted">No compatible legacy server database was detected. New games are already being saved locally on this device.</p>`}
+      </div>`:''}
+      <div class="card">
+        <h3>${USE_LOCAL_STORE?'Docker / PWA edition':'Mobile edition'}</h3>
+        ${statusRow(true,`DartDeck ${APP_VERSION}`)}
+        ${statusRow(true,USE_LOCAL_STORE?'Local device storage active':'Offline local storage active')}
+        ${statusRow(wake,wake?'Screen Wake Lock available':'Screen Wake Lock unavailable')}
+        ${USE_LOCAL_STORE?statusRow(secure,secure?'Secure context: yes':'Secure context: no — HTTPS recommended'):''}
+        ${USE_LOCAL_STORE?statusRow(standalone,standalone?'Running as installed app':'Running in browser'):''}
+        ${USE_LOCAL_STORE?statusRow(storagePersistent,storagePersistent?'Persistent storage granted':'Persistent storage not confirmed'):''}
+        ${USE_LOCAL_STORE?`<div class="actions"><button class="btn primary" id="installFromSettings" ${(!deferredInstallPrompt||standalone)?'disabled':''}>${esc(installText)}</button><button class="btn" id="protectStorage" ${storagePersistent?'disabled':''}>Protect local data</button></div>`:''}
+        <p class="muted">${USE_LOCAL_STORE?'Players, matches, head-to-head stats and Training Centre results now live on this browser/device — not in the Docker database.':'No Docker server, account or internet connection is required.'}</p>
+      </div>
+    </div>`;
+  $('#fontChoice').value=appSettings.font;
+  let draftTheme=themeId,draftAccent=appSettings.primary_color;
+  const preview=()=>applySettings({...appSettings,theme_id:draftTheme,primary_color:draftAccent,font:$('#fontChoice').value,dartboard_mode:true});
+  $$('[data-theme]').forEach(b=>b.onclick=()=>{draftTheme=b.dataset.theme;$$('[data-theme]').forEach(x=>x.classList.toggle('selected',x===b));preview();});
+  $$('[data-accent]').forEach(b=>b.onclick=()=>{draftAccent=b.dataset.accent;$('#mobileAccent').value=draftAccent;$$('[data-accent]').forEach(x=>x.classList.toggle('selected',x===b));preview();});
+  $('#mobileAccent').oninput=e=>{draftAccent=e.target.value;$$('[data-accent]').forEach(x=>x.classList.toggle('selected',x.dataset.accent.toLowerCase()===draftAccent.toLowerCase()));preview();};
+  $('#fontChoice').onchange=preview;
+  $('#saveMobileAppearance').onclick=async()=>{appSettings=await api('/api/settings',{method:'PUT',body:JSON.stringify({theme_id:draftTheme,primary_color:draftAccent,font:$('#fontChoice').value,dartboard_mode:true})});applySettings(appSettings);toast('Appearance saved');};
+  $('#saveMobileGameSettings').onclick=async()=>{appSettings=await api('/api/settings',{method:'PUT',body:JSON.stringify({keep_awake:$('#keepAwake').checked,dartboard_mode:true})});applySettings(appSettings);syncWakeLock();toast('Game settings saved');};
+  if(USE_LOCAL_STORE){
+    $('#exportBackup').onclick=exportLocalBackup;
+    $('#backupFile').onchange=()=>{const ready=!!$('#backupFile').files[0];$('#mergeBackup').disabled=!ready;$('#replaceBackup').disabled=!ready;};
+    $('#mergeBackup').onclick=()=>importLocalBackup('merge');
+    $('#replaceBackup').onclick=()=>importLocalBackup('replace');
+    $('#migrateLegacy')?.addEventListener('click',migrateLegacyServer);
+    $('#installFromSettings')?.addEventListener('click',installPwa);
+    $('#protectStorage')?.addEventListener('click',async()=>{if(!navigator.storage?.persist){toast('Persistent storage is not supported by this browser',3200);return;}const ok=await navigator.storage.persist().catch(()=>false);toast(ok?'Persistent storage granted':'Browser did not grant persistent storage',3200);await mobileSettingsView();});
+  }
+}
+
+async function exportLocalBackup(){
+  const payload=await window.DartDeckLocalStore.exportData();
+  const stamp=new Date().toISOString().slice(0,10);
+  const blob=new Blob([JSON.stringify(payload,null,2)],{type:'application/json'});
+  const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=`dartdeck-backup-${stamp}.json`;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);toast('Backup exported');
+}
+async function importLocalBackup(mode){
+  const file=$('#backupFile')?.files?.[0];if(!file){toast('Choose a DartDeck backup first');return;}
+  if(mode==='replace'&&!confirm('Replace all DartDeck data on this device with this backup? This cannot be undone unless you export a backup first.'))return;
+  try{const payload=JSON.parse(await file.text());const result=await window.DartDeckLocalStore.importData(payload,mode);await loadPlayers();toast(`${mode==='merge'?'Merged':'Restored'} · ${result.summary.matches} matches · ${result.summary.practice} training sessions`,3500);await mobileSettingsView();}catch(e){toast(e.message||'Could not import backup',4000);}
+}
+async function migrateLegacyServer(){
+  if(!confirm('Copy the existing server history to this device? The old server database will remain unchanged.'))return;
+  try{
+    const r=await fetch('/api/migration/export',{cache:'no-store'});if(!r.ok){const e=await r.json().catch(()=>({detail:'Migration export failed'}));throw new Error(e.detail||'Migration export failed');}
+    const payload=await r.json();const result=await window.DartDeckLocalStore.importData(payload,'merge');await loadPlayers();
+    toast(`Migration complete · ${result.players_added} players · ${result.matches_added} matches · ${result.practice_added} training sessions copied`,4500);await mobileSettingsView();
+  }catch(e){toast(e.message||'Migration failed',4500);}
+}
+
 function colourField(label,id,value){return `<label>${label}<span class="colour-field"><input type="color" id="${id}" value="${value}"><input value="${value}" aria-label="${label} hex colour" data-sync="${id}" maxlength="7"></span></label>`}
 function statusRow(ok,text){return `<div class="status-row"><span class="status-dot ${ok?'ok':'bad'}"></span><span>${text}</span></div>`}
 async function saveSettingsFromForm(){
@@ -394,7 +521,7 @@ function startX01(cfg){
   setGameplayActive(true);document.body.classList.add('x01-gameplay');
   const selected=cfg.ids.map(id=>players.find(p=>p.id===id));
   if(cfg.botLevel){const b=BOT_LEVELS[cfg.botLevel];selected.push({id:`bot-${cfg.botLevel}`,name:`DartBot · ${b.label}`,isBot:true,botLevel:cfg.botLevel});}
-  x01={...cfg, players:selected.map(p=>basePlayer(p,cfg.start)), turn:0, visit:[], mult:1, quick:'', history:[], finished:false, legNo:1, checkoutPending:null,checkoutFallback:false};
+  x01={...cfg, players:selected.map(p=>basePlayer(p,cfg.start)), turn:0, visit:[], mult:1, quick:'', history:[], finished:false, legNo:1, checkoutPending:null,checkoutFallback:false,botReveal:null};
   renderX01();
 }
 
@@ -422,7 +549,7 @@ function renderX01(){
     <div class="card x01-entry-pane">
       ${checkoutConfirm}
       <div class="game-status">${esc(active.name)} to throw ${g.doubleIn&&!active.in?'· needs a double to get in':''}</div>
-      ${g.checkoutPending?'':(active.isBot?`<div class="bot-turn"><div class="bot-avatar">🤖</div><strong>DartBot is throwing…</strong><span>${BOT_LEVELS[active.botLevel]?.label||'Opponent'} · target avg ${BOT_LEVELS[active.botLevel]?.avg||'—'}</span></div>`:(g.mode==='quick'?quickInput():dartInput()))}
+      ${g.checkoutPending?'':(active.isBot?botTurnMarkup(active,g):(g.mode==='quick'?quickInput():dartInput()))}
       <div class="actions x01-secondary-actions"><button class="btn" id="switchInput">${g.checkoutPending?'Enter dart-by-dart instead':g.mode==='quick'?'Dart-by-dart':'Quick score'}</button><button class="btn" id="undo">Undo last visit</button><button class="btn danger" id="endGame">End game</button></div>
     </div>
   </div>`;
@@ -442,6 +569,14 @@ function dartInput(){
   <div class="dartboard">${Array.from({length:20},(_,i)=>i+1).map(n=>`<button data-seg="${n}">${n}</button>`).join('')}<button data-seg="25">Bull</button></div>
   <div class="actions"><button class="btn" id="clearDarts">Clear darts</button><button class="btn primary big" id="submitDarts">${x01.checkoutPending?'Confirm checkout':'Submit visit'}</button></div>`;
 }
+function botTurnMarkup(active,g){
+  if(g.botReveal){
+    const r=g.botReveal;
+    return `<div class="bot-turn bot-reveal"><div class="bot-avatar">🤖</div><span class="eyebrow">DARTBOT VISIT</span><div class="bot-visit-score">${r.score}</div><strong>${r.checkout?`Checkout in ${r.darts} ${r.darts===1?'dart':'darts'}`:`DartBot threw ${r.score}`}</strong>${r.route?.length?`<span>${r.route.join(' → ')}</span>`:`<span>${BOT_LEVELS[active.botLevel]?.label||'Opponent'}</span>`}</div>`;
+  }
+  return `<div class="bot-turn"><div class="bot-avatar">🤖</div><strong>DartBot is throwing…</strong><span>${BOT_LEVELS[active.botLevel]?.label||'Opponent'} · target avg ${BOT_LEVELS[active.botLevel]?.avg||'—'}</span></div>`;
+}
+
 function bindX01(){
   $$('[data-checkout-darts]').forEach(b=>b.onclick=()=>{
     const pending=x01.checkoutPending;
@@ -639,22 +774,28 @@ function nearestPlausibleVisit(desired,max,remaining,out){
   if(!vals.length)return 0;return vals.reduce((best,n)=>Math.abs(n-desired)<Math.abs(best-desired)?n:best,vals[0]);
 }
 function scheduleDartBot(){
-  if(botTimer||!x01||x01.finished||!x01.players[x01.turn]?.isBot)return;
-  botTimer=setTimeout(()=>{botTimer=null;runDartBotTurn();},650);
+  if(botTimer||!x01||x01.finished||x01.botReveal||!x01.players[x01.turn]?.isBot)return;
+  botTimer=setTimeout(()=>{botTimer=null;runDartBotTurn();},850);
+}
+function revealBotVisit(reveal,commit){
+  if(!x01||x01.finished)return;
+  x01.botReveal=reveal;renderX01();
+  botTimer=setTimeout(()=>{botTimer=null;if(!x01||x01.finished)return;x01.botReveal=null;commit();},1800);
 }
 function runDartBotTurn(){
   const g=x01;if(!g||g.finished)return;const p=g.players[g.turn];if(!p?.isBot)return;
   const cfg=BOT_LEVELS[p.botLevel]||BOT_LEVELS.club;
   const route=getCheckout(p.score,g.out);
   if(route&&Math.random()<cfg.checkout){
-    commitVisit({score:p.score,darts:route.length,finishDarts:route.length,labels:route,dartObjs:null,checkoutConfirmed:true});
+    const score=p.score,darts=route.length;
+    revealBotVisit({score,darts,route,checkout:true},()=>commitVisit({score,darts,finishDarts:darts,labels:route,dartObjs:null,checkoutConfirmed:true}));
     return;
   }
   let max=Math.min(180,Math.max(0,p.score-(g.out==='double'?2:1)));
   let desired=Math.round(gaussian(cfg.avg,Math.max(16,34-cfg.avg/5)));
   if(Math.random()<0.08+cfg.avg/800)desired=[100,121,125,140,180][Math.floor(Math.random()*5)];
   const score=nearestPlausibleVisit(desired,max,p.score,g.out);
-  commitVisit({score,darts:3,finishDarts:null,labels:[String(score)],dartObjs:null});
+  revealBotVisit({score,darts:3,route:null,checkout:false},()=>commitVisit({score,darts:3,finishDarts:null,labels:[String(score)],dartObjs:null}));
 }
 
 function partyMenu(){
@@ -789,6 +930,10 @@ async function partyWinner(p,extra=''){
   $('#againP').onclick=()=>startParty(g.type,g.players.map(x=>x.id),g.rounds,g.type==='killer'?g.players.map(x=>x.number):[]);$('#newP').onclick=()=>partySetup(g.type);$('#partyProfile').onclick=()=>playerDashboard(p.id);$('#homeP').onclick=home;
 }
 
+function partyExitMarkup(){return `<div class="game-exit-row"><button class="btn danger" id="exitPartyGame">Exit game</button></div>`;}
+function bindPartyExit(){const b=$('#exitPartyGame');if(b)b.onclick=()=>{if(confirm('End this game without saving?')){party=null;route('home');}};}
+function practiceExit(){if(confirm('Exit this training session without saving?')){practice=null;route('home');}}
+
 function renderCricket(){
   const g=party,p=g.players[g.turn],segs=[20,19,18,17,16,15,25];
   g.mult=g.mult||1;
@@ -799,11 +944,11 @@ function renderCricket(){
   view.innerHTML=`<div class="section-title"><h2>Cricket</h2><span class="muted"><strong>${esc(p.name)}</strong> · dart ${g.darts+1}/3</span></div>
   <details class="cricket-rules"><summary>How Cricket works</summary><div>Close 20–15 and Bull with 3 marks. Extra marks score while an opponent still has that target open. Close everything while level or ahead to win.</div></details>
   <div class="card table-wrap cricket-score-card"><table class="cricket-table"><thead><tr><th>Target</th>${g.players.map((x,i)=>`<th>${esc(x.name)}${i===g.turn?' ●':''}<div class="table-score">${x.score} pts</div></th>`).join('')}</tr></thead><tbody>${rows}</tbody></table><div class="cricket-legend"><span>╱ 1</span><span>✕ 2</span><span>⊗ closed</span></div></div>
-  <div class="card cricket-controls"><div class="multis cricket-mults"><button data-cm="1" class="${g.mult===1?'active':''}">Single</button><button data-cm="2" class="${g.mult===2?'active':''}">Double</button><button data-cm="3" class="${g.mult===3?'active':''}">Treble</button></div><div class="cricket-targets">${[20,19,18,17,16,15].map(seg=>`<button data-cseg="${seg}" ${g.players.every(x=>x.marks[seg]>=3)?'disabled':''}>${seg}</button>`).join('')}<button data-cbull="1" ${g.players.every(x=>x.marks[25]>=3)?'disabled':''}>Outer Bull<br><small>1 mark</small></button><button data-cbull="2" ${g.players.every(x=>x.marks[25]>=3)?'disabled':''}>Bullseye<br><small>2 marks</small></button><button class="miss-button" data-cmiss="1">Miss</button></div></div>`;
+  <div class="card cricket-controls"><div class="multis cricket-mults"><button data-cm="1" class="${g.mult===1?'active':''}">Single</button><button data-cm="2" class="${g.mult===2?'active':''}">Double</button><button data-cm="3" class="${g.mult===3?'active':''}">Treble</button></div><div class="cricket-targets">${[20,19,18,17,16,15].map(seg=>`<button data-cseg="${seg}" ${g.players.every(x=>x.marks[seg]>=3)?'disabled':''}>${seg}</button>`).join('')}<button data-cbull="1" ${g.players.every(x=>x.marks[25]>=3)?'disabled':''}>Outer Bull<br><small>1 mark</small></button><button data-cbull="2" ${g.players.every(x=>x.marks[25]>=3)?'disabled':''}>Bullseye<br><small>2 marks</small></button><button class="miss-button" data-cmiss="1">Miss</button></div></div>${partyExitMarkup()}`;
   $$('[data-cm]').forEach(b=>b.onclick=()=>{g.mult=+b.dataset.cm;renderCricket();});
   $$('[data-cseg]').forEach(b=>b.onclick=()=>cricketDart(+b.dataset.cseg,g.mult));
   $$('[data-cbull]').forEach(b=>b.onclick=()=>cricketDart(25,+b.dataset.cbull));
-  $('[data-cmiss]').onclick=()=>cricketDart(null,0);
+  $('[data-cmiss]').onclick=()=>cricketDart(null,0);bindPartyExit();
 }
 function cricketMarks(n){return n>=3?'⊗':n===2?'✕':n===1?'╱':'—'}
 function cricketDart(seg,m){
@@ -832,10 +977,10 @@ function renderKiller(){
   const cards=g.players.map((x,i)=>`<div class="killer-card ${i===g.turn?'active':''} ${x.lives<=0?'eliminated':''}"><div class="killer-card-top"><strong>${esc(x.name)}</strong><span class="killer-badge ${x.killer?'on':''}">${x.killer?'KILLER':'NOT KILLER'}</span></div><div class="killer-number">D${x.number}</div><div class="killer-lives">${Array.from({length:g.rounds},(_,n)=>`<span class="${n<x.lives?'live':''}">♥</span>`).join('')}</div>${x.lives<=0?'<div class="eliminated-label">OUT</div>':''}</div>`).join('');
   const attackButtons=g.players.filter(x=>x.id!==p.id&&x.lives>0).map(x=>`<button class="btn killer-attack" data-kattack="${x.id}"><strong>D${x.number}</strong><span>${esc(x.name)} · ${x.lives} ${x.lives===1?'life':'lives'}</span></button>`).join('');
   const controls=!p.killer?`<div class="target-focus"><span>Your Killer target</span><strong>D${p.number}</strong></div><p class="muted" style="text-align:center">Hit your own double to become a Killer. Once you qualify, any remaining darts this turn can attack.</p><div class="actions"><button class="btn primary big" id="qualifyKiller">Hit D${p.number} ✓</button><button class="btn big" id="killerMiss">Miss</button></div>`:`<div class="target-focus"><span>You are a</span><strong>👑 KILLER</strong></div><p class="muted" style="text-align:center">Each opponent double you hit removes one life. Tap the opponent you hit, or Miss.</p><div class="killer-attack-grid">${attackButtons}</div><div class="actions"><button class="btn big" id="killerMiss">Miss</button></div>`;
-  view.innerHTML=`<div class="section-title"><h2>Killer</h2><span class="muted">${esc(p.name)} · dart ${g.darts+1}/3</span></div><div class="game-help"><strong>This DartDeck version</strong><span>Each player owns one number and starts with ${g.rounds} lives. Hit the <b>double of your own number</b> to become a Killer. Killers remove one life each time they hit an opponent’s double. Last player with lives wins.</span></div><div class="killer-grid">${cards}</div><div class="card">${controls}</div>`;
+  view.innerHTML=`<div class="section-title"><h2>Killer</h2><span class="muted">${esc(p.name)} · dart ${g.darts+1}/3</span></div><div class="game-help"><strong>This DartDeck version</strong><span>Each player owns one number and starts with ${g.rounds} lives. Hit the <b>double of your own number</b> to become a Killer. Killers remove one life each time they hit an opponent’s double. Last player with lives wins.</span></div><div class="killer-grid">${cards}</div><div class="card">${controls}</div>${partyExitMarkup()}`;
   $('#qualifyKiller')?.addEventListener('click',()=>killerDart('qualify'));
   $('#killerMiss')?.addEventListener('click',()=>killerDart('miss'));
-  $$('[data-kattack]').forEach(b=>b.onclick=()=>killerDart('attack',+b.dataset.kattack));
+  $$('[data-kattack]').forEach(b=>b.onclick=()=>killerDart('attack',+b.dataset.kattack));bindPartyExit();
 }
 function killerDart(action,targetId=null){
   const g=party,p=g.players[g.turn];
@@ -859,8 +1004,8 @@ function endKillerTurn(){
 function renderShanghai(){
   const g=party,p=g.players[g.turn],target=g.round;
   const visitText=g.visit.length?g.visit.map(m=>m===0?'Miss':m===1?`S${target}`:m===2?`D${target}`:`T${target}`).join(' · '):'No darts entered';
-  view.innerHTML=`<div class="section-title"><h2>Shanghai</h2><span class="muted">${esc(p.name)} · dart ${g.darts+1}/3</span></div><div class="target-focus target-focus-large"><span>ROUND ${g.round} OF 7 · CURRENT TARGET</span><strong>${target}</strong></div>${scoreCards(g,()=>`Round ${g.round}`)}<div class="card"><p class="muted" style="text-align:center">Tap what each dart hit. A Single + Double + Treble of the current number in the same visit is an instant Shanghai win.</p><div class="visit-darts"><span class="${g.visit.length?'':'muted'}">${visitText}</span></div><div class="sdt-grid"><button data-sh="1"><strong>S</strong><span>Single ${target}</span></button><button data-sh="2"><strong>D</strong><span>Double ${target}</span></button><button data-sh="3"><strong>T</strong><span>Treble ${target}</span></button><button class="miss-button" data-sh="0"><strong>×</strong><span>Miss</span></button></div></div>`;
-  $$('[data-sh]').forEach(b=>b.onclick=()=>shanghaiDart(+b.dataset.sh));
+  view.innerHTML=`<div class="section-title"><h2>Shanghai</h2><span class="muted">${esc(p.name)} · dart ${g.darts+1}/3</span></div><div class="target-focus target-focus-large"><span>ROUND ${g.round} OF 7 · CURRENT TARGET</span><strong>${target}</strong></div>${scoreCards(g,()=>`Round ${g.round}`)}<div class="card"><p class="muted" style="text-align:center">Tap what each dart hit. A Single + Double + Treble of the current number in the same visit is an instant Shanghai win.</p><div class="visit-darts"><span class="${g.visit.length?'':'muted'}">${visitText}</span></div><div class="sdt-grid"><button data-sh="1"><strong>S</strong><span>Single ${target}</span></button><button data-sh="2"><strong>D</strong><span>Double ${target}</span></button><button data-sh="3"><strong>T</strong><span>Treble ${target}</span></button><button class="miss-button" data-sh="0"><strong>×</strong><span>Miss</span></button></div></div>${partyExitMarkup()}`;
+  $$('[data-sh]').forEach(b=>b.onclick=()=>shanghaiDart(+b.dataset.sh));bindPartyExit();
 }
 function shanghaiDart(mult){
   const g=party,p=g.players[g.turn],target=g.round;
@@ -880,8 +1025,8 @@ function halveHelp(target){
 }
 function renderHalveIt(){
   const g=party,p=g.players[g.turn],target=halveTarget(g.round);
-  view.innerHTML=`<div class="section-title"><h2>Halve-It</h2><span class="muted">Round ${g.round} of 7 · ${esc(p.name)}</span></div><div class="target-focus target-focus-large"><span>CURRENT TARGET</span><strong>${target}</strong></div>${scoreCards(g,()=>`Round ${g.round}`)}<div class="card"><p class="muted" style="text-align:center">${halveHelp(target)} Enter the total from your three darts. Enter <b>0</b> if you missed the target completely — your running score will be halved.</p>${partyQuickPad('halve',g.quick,'Points scored on this target')}</div>`;
-  bindPartyQuickPad('halve',g,n=>{p.score=n===0?Math.floor(p.score/2):p.score+n;g.quick='';advanceRoundGame();});
+  view.innerHTML=`<div class="section-title"><h2>Halve-It</h2><span class="muted">Round ${g.round} of 7 · ${esc(p.name)}</span></div><div class="target-focus target-focus-large"><span>CURRENT TARGET</span><strong>${target}</strong></div>${scoreCards(g,()=>`Round ${g.round}`)}<div class="card"><p class="muted" style="text-align:center">${halveHelp(target)} Enter the total from your three darts. Enter <b>0</b> if you missed the target completely — your running score will be halved.</p>${partyQuickPad('halve',g.quick,'Points scored on this target')}</div>${partyExitMarkup()}`;
+  bindPartyQuickPad('halve',g,n=>{p.score=n===0?Math.floor(p.score/2):p.score+n;g.quick='';advanceRoundGame();});bindPartyExit();
 }
 
 function practiceMenu(){
@@ -940,15 +1085,15 @@ function randomCheckout(){const choices=[];for(let n=40;n<=170;n++)if(getCheckou
 function renderPractice(){const g=practice;if(g.mode==='checkout')return renderCheckoutTrainer();if(g.mode==='doubles')return renderDoublesTrainer();if(g.mode==='121')return render121();if(g.mode==='bobs27')return renderBobs27();}
 function renderCheckoutTrainer(){
   const g=practice,rate=g.attempts?g.hits*100/g.attempts:0;
-  view.innerHTML=`<div class="section-title"><h2>${practiceName(g.mode)}</h2><span class="muted">Round ${g.round}</span></div><div class="card"><div class="target-big">${g.target}</div><div class="checkout"><strong>Route:</strong> ${(getCheckout(g.target,'double')||['No route']).join(' → ')}</div><p class="muted" style="text-align:center">Did you finish it within 3 darts?</p><div class="actions"><button class="btn primary big" data-pr="hit">Checkout ✓</button><button class="btn big" data-pr="miss">Miss</button></div><div class="training-live"><strong>${fmt(rate,1)}%</strong><span>${g.hits} checkouts from ${g.attempts} attempts</span></div><div class="actions"><button class="btn" id="endTraining">End session</button></div></div>`;
-  $$('[data-pr]').forEach(b=>b.onclick=()=>{g.attempts++;if(b.dataset.pr==='hit')g.hits++;g.target=randomCheckout();g.round++;renderPractice();});$('#endTraining').onclick=finishPractice;
+  view.innerHTML=`<div class="section-title"><h2>${practiceName(g.mode)}</h2><span class="muted">Round ${g.round}</span></div><div class="card"><div class="target-big">${g.target}</div><div class="checkout"><strong>Route:</strong> ${(getCheckout(g.target,'double')||['No route']).join(' → ')}</div><p class="muted" style="text-align:center">Did you finish it within 3 darts?</p><div class="actions"><button class="btn primary big" data-pr="hit">Checkout ✓</button><button class="btn big" data-pr="miss">Miss</button></div><div class="training-live"><strong>${fmt(rate,1)}%</strong><span>${g.hits} checkouts from ${g.attempts} attempts</span></div><div class="actions"><button class="btn" id="endTraining">End session</button><button class="btn danger" id="exitTraining">Exit</button></div></div>`;
+  $$('[data-pr]').forEach(b=>b.onclick=()=>{g.attempts++;if(b.dataset.pr==='hit')g.hits++;g.target=randomCheckout();g.round++;renderPractice();});$('#endTraining').onclick=finishPractice;$('#exitTraining').onclick=practiceExit;
 }
 function renderDoublesTrainer(){
   const g=practice,target=g.doubleSequence[g.doubleIndex],label=doubleLabel(target),rate=g.attempts?g.hits*100/g.attempts:0,total=g.doubleSequence.length;
   if(target==null){finishPractice();return;}
   const subLabel=({all:'All Doubles',checkout:'Checkout Doubles',weak:'Weakest Doubles',custom:'Custom'})[g.options.submode]||'Doubles';
-  view.innerHTML=`<div class="section-title"><h2>Doubles Trainer</h2><span class="muted">${subLabel}</span></div><div class="training-score-grid"><div class="target-focus target-focus-large"><span>CURRENT TARGET · ${g.doubleIndex+1} OF ${total}</span><strong>${label}</strong></div><div class="target-focus"><span>SESSION ACCURACY</span><strong>${g.attempts?fmt(rate,0)+'%':'—'}</strong></div></div><div class="card"><p class="muted" style="text-align:center">Throw three darts at <b>${label}</b>, then record how many hit the double.</p><div class="hit-count-grid">${[0,1,2,3].map(n=>`<button class="${n?'primary':''}" data-doublehit="${n}"><strong>${n}</strong><span>${n===1?'hit':'hits'}</span></button>`).join('')}</div><div class="training-live"><strong>${g.hits} / ${g.attempts}</strong><span>Hits from darts thrown so far</span></div><div class="actions"><button class="btn" id="endTraining">End session</button></div></div>`;
-  $$('[data-doublehit]').forEach(b=>b.onclick=()=>doublesVisit(+b.dataset.doublehit));$('#endTraining').onclick=finishPractice;
+  view.innerHTML=`<div class="section-title"><h2>Doubles Trainer</h2><span class="muted">${subLabel}</span></div><div class="training-score-grid"><div class="target-focus target-focus-large"><span>CURRENT TARGET · ${g.doubleIndex+1} OF ${total}</span><strong>${label}</strong></div><div class="target-focus"><span>SESSION ACCURACY</span><strong>${g.attempts?fmt(rate,0)+'%':'—'}</strong></div></div><div class="card"><p class="muted" style="text-align:center">Throw three darts at <b>${label}</b>, then record how many hit the double.</p><div class="hit-count-grid">${[0,1,2,3].map(n=>`<button class="${n?'primary':''}" data-doublehit="${n}"><strong>${n}</strong><span>${n===1?'hit':'hits'}</span></button>`).join('')}</div><div class="training-live"><strong>${g.hits} / ${g.attempts}</strong><span>Hits from darts thrown so far</span></div><div class="actions"><button class="btn" id="endTraining">End session</button><button class="btn danger" id="exitTraining">Exit</button></div></div>`;
+  $$('[data-doublehit]').forEach(b=>b.onclick=()=>doublesVisit(+b.dataset.doublehit));$('#endTraining').onclick=finishPractice;$('#exitTraining').onclick=practiceExit;
 }
 function doublesVisit(hits){const g=practice,target=g.doubleSequence[g.doubleIndex],key=String(target);g.targetHits[key]=(g.targetHits[key]||0)+hits;g.targetDarts[key]=(g.targetDarts[key]||0)+3;g.hits+=hits;g.attempts+=3;g.lastTarget=doubleLabel(target);g.doubleIndex++;g.round++;if(g.doubleIndex>=g.doubleSequence.length){finishPractice();return;}renderDoublesTrainer();}
 function practiceQuickPad(prefix,value,label='Enter visit score'){return partyQuickPad(prefix,value,label);}
@@ -957,16 +1102,16 @@ function render121(){
   const g=practice,dartsLeft=(4-g.targetVisit)*3,routeNow=g.remaining<=170?(getCheckout(g.remaining,'double')||null):null;
   const pending=g.checkoutPending?`<div class="checkout-confirm"><div class="checkout-confirm-icon">🎯</div><div><strong>Did that visit finish on a double?</strong><p>You entered <b>${g.checkoutPending.score}</b> from ${g.checkoutPending.from}. Quick scoring keeps the tally without making you remember the exact darts.</p><div class="actions" style="justify-content:flex-start"><button class="btn primary" id="p121Yes">Yes — checkout ✓</button><button class="btn" id="p121No">No — bust</button></div></div></div>`:'';
   const entry=g.checkoutPending?'':`<div class="card"><p class="muted" style="text-align:center">Enter the total scored with your next three darts. DartDeck keeps the running total for all three visits.</p>${practiceQuickPad('p121',g.quick,'Visit score')}</div>`;
-  view.innerHTML=`<div class="section-title"><h2>121</h2><span class="muted">Attempt ${g.round}</span></div><div class="training-score-grid"><div class="target-focus"><span>ATTEMPT TARGET</span><strong>${g.target}</strong></div><div class="target-focus"><span>REMAINING</span><strong>${g.remaining}</strong></div></div><div class="practice-progress"><strong>Visit ${g.targetVisit} of 3</strong><span>${dartsLeft} darts remaining</span></div>${routeNow?`<div class="checkout"><strong>Checkout:</strong> ${routeNow.join(' → ')}</div>`:`<div class="checkout"><strong>Setup:</strong> ${suggestSetup(g.remaining)}</div>`}${pending}${entry}<div class="training-live"><strong>${g.hits?g.target-1:'—'}</strong><span>Best target this session · ${g.hits} successful levels / ${g.attempts} completed attempts</span></div><div class="actions"><button class="btn" id="endTraining">End session</button></div>`;
-  if(g.checkoutPending){$('#p121Yes').onclick=()=>complete121(true);$('#p121No').onclick=()=>{g.checkoutPending=false;toast('Bust — score restored');advance121Visit();};}else bindPracticeQuickPad('p121',g,n=>submit121Visit(n));$('#endTraining').onclick=finishPractice;
+  view.innerHTML=`<div class="section-title"><h2>121</h2><span class="muted">Attempt ${g.round}</span></div><div class="training-score-grid"><div class="target-focus"><span>ATTEMPT TARGET</span><strong>${g.target}</strong></div><div class="target-focus"><span>REMAINING</span><strong>${g.remaining}</strong></div></div><div class="practice-progress"><strong>Visit ${g.targetVisit} of 3</strong><span>${dartsLeft} darts remaining</span></div>${routeNow?`<div class="checkout"><strong>Checkout:</strong> ${routeNow.join(' → ')}</div>`:`<div class="checkout"><strong>Setup:</strong> ${suggestSetup(g.remaining)}</div>`}${pending}${entry}<div class="training-live"><strong>${g.hits?g.target-1:'—'}</strong><span>Best target this session · ${g.hits} successful levels / ${g.attempts} completed attempts</span></div><div class="actions"><button class="btn" id="endTraining">End session</button><button class="btn danger" id="exitTraining">Exit</button></div>`;
+  if(g.checkoutPending){$('#p121Yes').onclick=()=>complete121(true);$('#p121No').onclick=()=>{g.checkoutPending=false;toast('Bust — score restored');advance121Visit();};}else bindPracticeQuickPad('p121',g,n=>submit121Visit(n));$('#endTraining').onclick=finishPractice;$('#exitTraining').onclick=practiceExit;
 }
 function submit121Visit(n){const g=practice,before=g.remaining;g.quick='';const left=before-n;if(left<0||left===1){toast('Bust — score restored');advance121Visit();return;}if(left===0){g.checkoutPending={from:before,score:n};render121();return;}g.remaining=left;advance121Visit();}
 function advance121Visit(){const g=practice;g.checkoutPending=false;g.quick='';if(g.targetVisit<3){g.targetVisit++;render121();return;}g.attempts++;g.round++;g.targetVisit=1;g.remaining=g.target;toast(`${g.target} not finished in 9 darts — try it again`,2400);render121();}
 function complete121(success){const g=practice;g.checkoutPending=false;g.quick='';if(!success){advance121Visit();return;}g.hits++;g.attempts++;const done=g.target;g.target++;g.remaining=g.target;g.round++;g.targetVisit=1;toast(`Checked out ${done} — next target ${g.target}`,2200);render121();}
 function renderBobs27(){
   const g=practice,targetLabel=g.target===21?'Bull':'D'+g.target,doubleValue=g.target===21?50:g.target*2;
-  view.innerHTML=`<div class="section-title"><h2>Bob's 27</h2><span class="muted">Score ${g.score}</span></div><div class="game-help"><strong>D1 → D20 → Bull</strong><span>Three darts at each double. Every hit adds the double’s value; miss all three and that value is subtracted. Reach zero or below and the game ends.</span></div><div class="training-score-grid"><div class="target-focus target-focus-large"><span>CURRENT TARGET · ${g.target} OF 21</span><strong>${targetLabel}</strong></div><div class="target-focus"><span>CURRENT SCORE</span><strong>${g.score}</strong></div></div><div class="card"><p class="muted" style="text-align:center">How many of your three darts hit <b>${targetLabel}</b>? ${targetLabel==='Bull'?'Each inner Bull hit is worth 50.':`Each hit is worth ${doubleValue}.`}</p><div class="hit-count-grid">${[0,1,2,3].map(n=>`<button class="${n?'primary':''}" data-bobhit="${n}"><strong>${n}</strong><span>${n===1?'hit':'hits'}</span></button>`).join('')}</div><div class="actions"><button class="btn" id="endTraining">End session</button></div></div>`;
-  $$('[data-bobhit]').forEach(b=>b.onclick=()=>bob27Visit(+b.dataset.bobhit));$('#endTraining').onclick=finishPractice;
+  view.innerHTML=`<div class="section-title"><h2>Bob's 27</h2><span class="muted">Score ${g.score}</span></div><div class="game-help"><strong>D1 → D20 → Bull</strong><span>Three darts at each double. Every hit adds the double’s value; miss all three and that value is subtracted. Reach zero or below and the game ends.</span></div><div class="training-score-grid"><div class="target-focus target-focus-large"><span>CURRENT TARGET · ${g.target} OF 21</span><strong>${targetLabel}</strong></div><div class="target-focus"><span>CURRENT SCORE</span><strong>${g.score}</strong></div></div><div class="card"><p class="muted" style="text-align:center">How many of your three darts hit <b>${targetLabel}</b>? ${targetLabel==='Bull'?'Each inner Bull hit is worth 50.':`Each hit is worth ${doubleValue}.`}</p><div class="hit-count-grid">${[0,1,2,3].map(n=>`<button class="${n?'primary':''}" data-bobhit="${n}"><strong>${n}</strong><span>${n===1?'hit':'hits'}</span></button>`).join('')}</div><div class="actions"><button class="btn" id="endTraining">End session</button><button class="btn danger" id="exitTraining">Exit</button></div></div>`;
+  $$('[data-bobhit]').forEach(b=>b.onclick=()=>bob27Visit(+b.dataset.bobhit));$('#endTraining').onclick=finishPractice;$('#exitTraining').onclick=practiceExit;
 }
 function bob27Visit(hits){const g=practice,targetLabel=g.target===21?'Bull':'D'+g.target,doubleValue=g.target===21?50:g.target*2,key=g.target===21?'25':String(g.target);g.targetHits[key]=hits;g.targetDarts[key]=3;g.hits+=hits;g.attempts+=3;g.lastTarget=targetLabel;g.score+=hits>0?doubleValue*hits:-doubleValue;if(g.score<=0){g.busted=true;finishPractice();return;}if(g.target===21){finishPractice();return;}g.target++;renderBobs27();}
 async function finishPractice(){
@@ -1010,7 +1155,7 @@ document.addEventListener('click', event=>{
   if(button){ event.preventDefault(); route(button.dataset.nav); }
 });
 $('#installApp').onclick=installPwa;
-if('serviceWorker' in navigator){
+if(!IS_NATIVE_MOBILE && 'serviceWorker' in navigator){
   navigator.serviceWorker.register('/service-worker.js').then(()=>navigator.serviceWorker.ready).then(()=>{serviceWorkerReady=true;if(view.dataset.page==='settings')settingsView();}).catch(()=>{});
 }
 Promise.all([loadSettings(),loadPlayers()]).finally(()=>{

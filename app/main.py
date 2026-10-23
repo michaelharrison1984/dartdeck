@@ -1,623 +1,177 @@
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
-import json
-import re
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, UploadFile, File
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
-from PIL import Image, ImageOps
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
-DB_PATH = Path(os.getenv("DARTDECK_DB", "/data/dartdeck.db"))
-DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-BRANDING_DIR = DB_PATH.parent / "branding"
-BRANDING_DIR.mkdir(parents=True, exist_ok=True)
+LEGACY_DB = Path(os.getenv("DARTDECK_LEGACY_DB", "/data/dartdeck.db"))
 
-DEFAULT_SETTINGS = {
-    "primary_color": "#8ca75b",
-    "accent_color": "#b8cf8f",
-    "background_color": "#0d0f10",
-    "panel_color": "#171a1c",
-    "text_color": "#f4f6f1",
-    "muted_color": "#aeb5ad",
-    "font": "modern",
-    "keep_awake": True,
-    "dartboard_mode": False,
-}
-ALLOWED_FONTS = {"modern", "system", "rounded", "condensed", "classic", "mono"}
-HEX_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
-
-app = FastAPI(title="DartDeck", version="0.7.2")
+app = FastAPI(title="DartDeck Local", version="0.8.0")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
-def db() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH)
+def legacy_connection() -> sqlite3.Connection:
+    if not LEGACY_DB.exists():
+        raise HTTPException(404, "No legacy DartDeck database found")
+    # Open read-only: v0.8 never writes new game data to the server DB.
+    uri = f"file:{LEGACY_DB.as_posix()}?mode=ro"
+    try:
+        conn = sqlite3.connect(uri, uri=True)
+    except sqlite3.Error as exc:
+        raise HTTPException(500, f"Could not open legacy database: {exc}") from exc
     conn.row_factory = sqlite3.Row
     return conn
 
 
-def init_db() -> None:
-    with db() as conn:
-        conn.executescript(
-            """
-            CREATE TABLE IF NOT EXISTS players (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL UNIQUE COLLATE NOCASE,
-                created_at TEXT NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS matches (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                game_type TEXT NOT NULL,
-                start_score INTEGER,
-                winner_player_id INTEGER,
-                settings_json TEXT,
-                played_at TEXT NOT NULL,
-                FOREIGN KEY (winner_player_id) REFERENCES players(id)
-            );
-
-            CREATE TABLE IF NOT EXISTS match_players (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                match_id INTEGER NOT NULL,
-                player_id INTEGER NOT NULL,
-                finishing_position INTEGER,
-                darts_thrown INTEGER DEFAULT 0,
-                points_scored INTEGER DEFAULT 0,
-                three_dart_average REAL DEFAULT 0,
-                first_nine_average REAL DEFAULT 0,
-                highest_visit INTEGER DEFAULT 0,
-                highest_checkout INTEGER DEFAULT 0,
-                checkout_attempts INTEGER DEFAULT 0,
-                checkouts INTEGER DEFAULT 0,
-                scores_100_plus INTEGER DEFAULT 0,
-                scores_140_plus INTEGER DEFAULT 0,
-                scores_180 INTEGER DEFAULT 0,
-                legs_won INTEGER DEFAULT 0,
-                FOREIGN KEY (match_id) REFERENCES matches(id) ON DELETE CASCADE,
-                FOREIGN KEY (player_id) REFERENCES players(id)
-            );
-
-            CREATE TABLE IF NOT EXISTS practice_results (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                player_id INTEGER NOT NULL,
-                mode TEXT NOT NULL,
-                score REAL NOT NULL DEFAULT 0,
-                details_json TEXT,
-                played_at TEXT NOT NULL,
-                FOREIGN KEY (player_id) REFERENCES players(id)
-            );
-
-            CREATE TABLE IF NOT EXISTS app_settings (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL
-            );
-            """
-        )
+def has_table(conn: sqlite3.Connection, name: str) -> bool:
+    row = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)).fetchone()
+    return bool(row)
 
 
-@app.on_event("startup")
-def startup() -> None:
-    init_db()
-
-
-class PlayerIn(BaseModel):
-    name: str = Field(min_length=1, max_length=40)
-
-
-class MatchPlayerIn(BaseModel):
-    player_id: int
-    finishing_position: int | None = None
-    darts_thrown: int = 0
-    points_scored: int = 0
-    three_dart_average: float = 0
-    first_nine_average: float = 0
-    highest_visit: int = 0
-    highest_checkout: int = 0
-    checkout_attempts: int = 0
-    checkouts: int = 0
-    scores_100_plus: int = 0
-    scores_140_plus: int = 0
-    scores_180: int = 0
-    legs_won: int = 0
-
-
-class MatchIn(BaseModel):
-    game_type: str
-    start_score: int | None = None
-    winner_player_id: int | None = None
-    settings_json: str | None = None
-    players: list[MatchPlayerIn]
-
-
-class PracticeIn(BaseModel):
-    player_id: int
-    mode: str
-    score: float = 0
-    details_json: str | None = None
-
-
-class SettingsIn(BaseModel):
-    primary_color: str
-    accent_color: str
-    background_color: str
-    panel_color: str
-    text_color: str
-    muted_color: str
-    font: str
-    keep_awake: bool = True
-    dartboard_mode: bool = False
-
-
-def load_settings() -> dict[str, Any]:
-    result = dict(DEFAULT_SETTINGS)
-    with db() as conn:
-        rows = conn.execute("SELECT key, value FROM app_settings").fetchall()
-    for row in rows:
-        key = row["key"]
-        if key not in result:
-            continue
-        if key in {"keep_awake", "dartboard_mode"}:
-            result[key] = row["value"].lower() == "true"
-        else:
-            result[key] = row["value"]
-    result["has_custom_favicon"] = (BRANDING_DIR / "icon-512.png").exists()
-    return result
-
-
-def icon_path(size: int) -> Path:
-    custom = BRANDING_DIR / f"icon-{size}.png"
-    if custom.exists():
-        return custom
-    return STATIC_DIR / "icons" / f"icon-{size}.png"
-
-
-@app.get("/api/settings")
-def get_settings() -> dict[str, Any]:
-    return load_settings()
-
-
-@app.put("/api/settings")
-def update_settings(payload: SettingsIn) -> dict[str, Any]:
-    data = payload.model_dump()
-    for key in ("primary_color", "accent_color", "background_color", "panel_color", "text_color", "muted_color"):
-        if not HEX_RE.match(str(data[key])):
-            raise HTTPException(400, f"Invalid colour for {key}")
-    if data["font"] not in ALLOWED_FONTS:
-        raise HTTPException(400, "Invalid font")
-    with db() as conn:
-        for key, value in data.items():
-            stored = "true" if value is True else "false" if value is False else str(value)
-            conn.execute(
-                "INSERT INTO app_settings(key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                (key, stored),
-            )
-    return load_settings()
-
-
-@app.post("/api/settings/favicon")
-async def upload_favicon(file: UploadFile = File(...)) -> dict[str, Any]:
-    if file.content_type not in {"image/png", "image/jpeg", "image/webp"}:
-        raise HTTPException(400, "Upload a PNG, JPG or WebP image")
-    raw = await file.read()
-    if len(raw) > 5 * 1024 * 1024:
-        raise HTTPException(400, "Image must be 5 MB or smaller")
+def legacy_status() -> dict[str, Any]:
+    if not LEGACY_DB.exists():
+        return {"available": False, "players": 0, "matches": 0, "practice": 0, "x01_matches": 0, "total_180s": 0, "highest_checkout": 0}
     try:
-        from io import BytesIO
-        source = Image.open(BytesIO(raw)).convert("RGBA")
+        with legacy_connection() as conn:
+            required = all(has_table(conn, t) for t in ("players", "matches", "match_players", "practice_results"))
+            if not required:
+                return {"available": False, "reason": "Legacy database schema not recognised", "players": 0, "matches": 0, "practice": 0, "x01_matches": 0, "total_180s": 0, "highest_checkout": 0}
+            players = conn.execute("SELECT COUNT(*) c FROM players").fetchone()["c"]
+            matches = conn.execute("SELECT COUNT(*) c FROM matches").fetchone()["c"]
+            practice = conn.execute("SELECT COUNT(*) c FROM practice_results").fetchone()["c"]
+            x01 = conn.execute("SELECT COUNT(*) c FROM matches WHERE game_type='x01'").fetchone()["c"]
+            row = conn.execute(
+                """
+                SELECT COALESCE(SUM(mp.scores_180),0) total_180s,
+                       COALESCE(MAX(mp.highest_checkout),0) highest_checkout
+                FROM match_players mp
+                JOIN matches m ON m.id=mp.match_id
+                WHERE m.game_type='x01'
+                """
+            ).fetchone()
+            return {
+                "available": True,
+                "players": int(players),
+                "matches": int(matches),
+                "practice": int(practice),
+                "x01_matches": int(x01),
+                "total_180s": int(row["total_180s"] or 0),
+                "highest_checkout": int(row["highest_checkout"] or 0),
+                "database_path": str(LEGACY_DB),
+            }
+    except HTTPException:
+        raise
     except Exception as exc:
-        raise HTTPException(400, "Could not read that image") from exc
-    if min(source.size) < 64:
-        raise HTTPException(400, "Image must be at least 64 × 64 pixels")
-    # Centre-crop square, then generate all PWA/favicon sizes.
-    source = ImageOps.fit(source, (1024, 1024), method=Image.Resampling.LANCZOS)
-    for size in (64, 180, 192, 512):
-        out = source.resize((size, size), Image.Resampling.LANCZOS)
-        out.save(BRANDING_DIR / f"icon-{size}.png", "PNG", optimize=True)
-    return load_settings()
-
-
-@app.delete("/api/settings/favicon")
-def reset_favicon() -> dict[str, Any]:
-    for size in (64, 180, 192, 512):
-        path = BRANDING_DIR / f"icon-{size}.png"
-        if path.exists():
-            path.unlink()
-    return load_settings()
+        return {"available": False, "reason": str(exc), "players": 0, "matches": 0, "practice": 0, "x01_matches": 0, "total_180s": 0, "highest_checkout": 0}
 
 
 @app.get("/api/health")
 def health() -> dict[str, str]:
-    return {"status": "ok"}
+    return {"status": "ok", "storage": "local-device", "version": "0.8.0"}
 
 
-@app.get("/api/players")
-def list_players() -> list[dict[str, Any]]:
-    with db() as conn:
-        rows = conn.execute("SELECT id, name, created_at FROM players ORDER BY name COLLATE NOCASE").fetchall()
-    return [dict(r) for r in rows]
+@app.get("/api/migration/status")
+def migration_status() -> dict[str, Any]:
+    return legacy_status()
 
 
-@app.post("/api/players")
-def create_player(payload: PlayerIn) -> dict[str, Any]:
-    name = payload.name.strip()
-    if not name:
-        raise HTTPException(400, "Name is required")
-    now = datetime.now(timezone.utc).isoformat()
-    try:
-        with db() as conn:
-            cur = conn.execute("INSERT INTO players(name, created_at) VALUES (?, ?)", (name, now))
-            player_id = cur.lastrowid
-    except sqlite3.IntegrityError:
-        raise HTTPException(409, "Player already exists")
-    return {"id": player_id, "name": name, "created_at": now}
-
-
-@app.delete("/api/players/{player_id}")
-def delete_player(player_id: int) -> dict[str, bool]:
-    with db() as conn:
-        used = conn.execute(
-            "SELECT 1 FROM match_players WHERE player_id=? UNION SELECT 1 FROM practice_results WHERE player_id=? LIMIT 1",
-            (player_id, player_id),
-        ).fetchone()
-        if used:
-            raise HTTPException(409, "Player has recorded history and cannot be deleted")
-        cur = conn.execute("DELETE FROM players WHERE id=?", (player_id,))
-        if cur.rowcount == 0:
-            raise HTTPException(404, "Player not found")
-    return {"ok": True}
-
-
-@app.post("/api/matches")
-def save_match(payload: MatchIn) -> dict[str, int]:
-    now = datetime.now(timezone.utc).isoformat()
-    with db() as conn:
-        cur = conn.execute(
-            "INSERT INTO matches(game_type,start_score,winner_player_id,settings_json,played_at) VALUES (?,?,?,?,?)",
-            (payload.game_type, payload.start_score, payload.winner_player_id, payload.settings_json, now),
-        )
-        match_id = int(cur.lastrowid)
-        for p in payload.players:
-            conn.execute(
+@app.get("/api/migration/export")
+def migration_export() -> dict[str, Any]:
+    status = legacy_status()
+    if not status.get("available"):
+        raise HTTPException(404, status.get("reason") or "No legacy DartDeck data available")
+    with legacy_connection() as conn:
+        player_rows = conn.execute("SELECT id,name,created_at FROM players ORDER BY id").fetchall()
+        players = [
+            {"id": int(r["id"]), "uid": f"legacy-server-player-{int(r['id'])}", "name": r["name"], "created_at": r["created_at"]}
+            for r in player_rows
+        ]
+        matches: list[dict[str, Any]] = []
+        for m in conn.execute("SELECT id,game_type,start_score,winner_player_id,settings_json,played_at FROM matches ORDER BY id").fetchall():
+            mps = conn.execute(
                 """
-                INSERT INTO match_players(
-                    match_id, player_id, finishing_position, darts_thrown, points_scored,
-                    three_dart_average, first_nine_average, highest_visit, highest_checkout,
-                    checkout_attempts, checkouts, scores_100_plus, scores_140_plus, scores_180, legs_won
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                SELECT player_id,finishing_position,darts_thrown,points_scored,three_dart_average,
+                       first_nine_average,highest_visit,highest_checkout,checkout_attempts,checkouts,
+                       scores_100_plus,scores_140_plus,scores_180,legs_won
+                FROM match_players WHERE match_id=? ORDER BY id
                 """,
-                (
-                    match_id, p.player_id, p.finishing_position, p.darts_thrown, p.points_scored,
-                    p.three_dart_average, p.first_nine_average, p.highest_visit, p.highest_checkout,
-                    p.checkout_attempts, p.checkouts, p.scores_100_plus, p.scores_140_plus, p.scores_180, p.legs_won,
-                ),
-            )
-    return {"id": match_id}
+                (m["id"],),
+            ).fetchall()
+            matches.append({
+                "id": int(m["id"]),
+                "uid": f"legacy-server-match-{int(m['id'])}",
+                "game_type": m["game_type"],
+                "start_score": m["start_score"],
+                "winner_player_id": m["winner_player_id"],
+                "settings_json": m["settings_json"],
+                "played_at": m["played_at"],
+                "players": [dict(r) for r in mps],
+            })
+        practice = []
+        for r in conn.execute("SELECT id,player_id,mode,score,details_json,played_at FROM practice_results ORDER BY id").fetchall():
+            practice.append({
+                "id": int(r["id"]),
+                "uid": f"legacy-server-practice-{int(r['id'])}",
+                "player_id": int(r["player_id"]),
+                "mode": r["mode"],
+                "score": r["score"],
+                "details_json": r["details_json"],
+                "played_at": r["played_at"],
+            })
+        mapped_settings: dict[str, Any] = {}
+        if has_table(conn, "app_settings"):
+            rows = conn.execute("SELECT key,value FROM app_settings").fetchall()
+            legacy = {r["key"]: r["value"] for r in rows}
+            if legacy.get("primary_color"):
+                mapped_settings["primary_color"] = legacy["primary_color"]
+            if legacy.get("font") in {"modern", "system", "rounded", "condensed"}:
+                mapped_settings["font"] = legacy["font"]
+            if "keep_awake" in legacy:
+                mapped_settings["keep_awake"] = str(legacy["keep_awake"]).lower() == "true"
+            mapped_settings["dartboard_mode"] = True
+            mapped_settings["theme_id"] = "midnight"
+    return {
+        "dartdeck_format": "dartdeck-backup",
+        "schema_version": 1,
+        "source": {"edition": "docker-server-legacy", "version": "0.7.x", "database": LEGACY_DB.name},
+        "legacy_summary": status,
+        "data": {"players": players, "matches": matches, "practice": practice, "settings": mapped_settings},
+    }
 
 
-@app.post("/api/practice")
-def save_practice(payload: PracticeIn) -> dict[str, int]:
-    now = datetime.now(timezone.utc).isoformat()
-    with db() as conn:
-        cur = conn.execute(
-            "INSERT INTO practice_results(player_id,mode,score,details_json,played_at) VALUES (?,?,?,?,?)",
-            (payload.player_id, payload.mode, payload.score, payload.details_json, now),
-        )
-    return {"id": int(cur.lastrowid)}
-
-
-@app.get("/api/stats")
-def stats() -> list[dict[str, Any]]:
-    with db() as conn:
-        rows = conn.execute(
-            """
-            SELECT
-                p.id,
-                p.name,
-                COUNT(DISTINCT mp.match_id) AS matches,
-                COALESCE(SUM(mp.legs_won),0) AS legs_won,
-                ROUND(CASE WHEN SUM(mp.darts_thrown) > 0
-                    THEN SUM(mp.points_scored) * 3.0 / SUM(mp.darts_thrown)
-                    ELSE 0 END, 2) AS lifetime_average,
-                ROUND(MAX(mp.three_dart_average), 2) AS best_average,
-                COALESCE(MAX(mp.highest_checkout),0) AS highest_checkout,
-                COALESCE(MAX(mp.highest_visit),0) AS highest_visit,
-                COALESCE(SUM(mp.scores_180),0) AS total_180s,
-                COALESCE(SUM(mp.checkouts),0) AS checkouts,
-                COALESCE(SUM(mp.checkout_attempts),0) AS checkout_attempts
-            FROM players p
-            LEFT JOIN match_players mp ON mp.player_id=p.id
-              AND mp.match_id IN (SELECT id FROM matches WHERE game_type='x01')
-            GROUP BY p.id,p.name
-            ORDER BY p.name COLLATE NOCASE
-            """
-        ).fetchall()
-    return [dict(r) for r in rows]
-
-
-def _score_leaderboard(conn: sqlite3.Connection, game_type: str, limit: int = 100) -> list[dict[str, Any]]:
-    rows = conn.execute(
-        """
-        SELECT p.id AS player_id, p.name, MAX(mp.points_scored) AS value
-        FROM match_players mp
-        JOIN matches m ON m.id=mp.match_id
-        JOIN players p ON p.id=mp.player_id
-        WHERE m.game_type=?
-        GROUP BY p.id,p.name
-        ORDER BY value DESC, p.name COLLATE NOCASE
-        LIMIT ?
-        """,
-        (game_type, limit),
-    ).fetchall()
-    return [dict(r) for r in rows]
-
-
-def _wins_leaderboard(conn: sqlite3.Connection, game_type: str, limit: int = 100) -> list[dict[str, Any]]:
-    rows = conn.execute(
-        """
-        SELECT p.id AS player_id, p.name, COUNT(*) AS value
-        FROM matches m
-        JOIN players p ON p.id=m.winner_player_id
-        WHERE m.game_type=?
-        GROUP BY p.id,p.name
-        ORDER BY value DESC, p.name COLLATE NOCASE
-        LIMIT ?
-        """,
-        (game_type, limit),
-    ).fetchall()
-    return [dict(r) for r in rows]
-
-
-
-def _json_obj(raw: str | None) -> dict[str, Any]:
-    try:
-        value = json.loads(raw or "{}")
-        return value if isinstance(value, dict) else {}
-    except Exception:
-        return {}
-
-
-def _player_x01_summary(conn: sqlite3.Connection, player_id: int) -> dict[str, Any]:
-    row = conn.execute(
-        """
-        SELECT
-            COUNT(DISTINCT mp.match_id) AS matches,
-            SUM(CASE WHEN m.winner_player_id=? THEN 1 ELSE 0 END) AS wins,
-            COALESCE(SUM(mp.legs_won),0) AS legs_won,
-            COALESCE(SUM(mp.darts_thrown),0) AS darts_thrown,
-            COALESCE(SUM(mp.points_scored),0) AS points_scored,
-            ROUND(CASE WHEN SUM(mp.darts_thrown)>0 THEN SUM(mp.points_scored)*3.0/SUM(mp.darts_thrown) ELSE 0 END,2) AS lifetime_average,
-            ROUND(COALESCE(MAX(mp.three_dart_average),0),2) AS best_average,
-            COALESCE(MAX(mp.highest_checkout),0) AS highest_checkout,
-            COALESCE(MAX(mp.highest_visit),0) AS highest_visit,
-            COALESCE(SUM(mp.scores_180),0) AS total_180s,
-            COALESCE(SUM(mp.checkouts),0) AS checkouts,
-            COALESCE(SUM(mp.checkout_attempts),0) AS checkout_attempts
-        FROM match_players mp
-        JOIN matches m ON m.id=mp.match_id AND m.game_type='x01'
-        WHERE mp.player_id=?
-        """,
-        (player_id, player_id),
-    ).fetchone()
-    return dict(row) if row else {}
-
-
-@app.get("/api/players/{player_id}/profile")
-def player_profile(player_id: int) -> dict[str, Any]:
-    with db() as conn:
-        player = conn.execute("SELECT id,name,created_at FROM players WHERE id=?", (player_id,)).fetchone()
-        if not player:
-            raise HTTPException(404, "Player not found")
-        x01 = _player_x01_summary(conn, player_id)
-        party_rows = conn.execute(
-            """
-            SELECT m.game_type,
-                   SUM(CASE WHEN m.winner_player_id=? THEN 1 ELSE 0 END) AS wins,
-                   MAX(mp.points_scored) AS best_score,
-                   COUNT(*) AS games
-            FROM match_players mp JOIN matches m ON m.id=mp.match_id
-            WHERE mp.player_id=? AND m.game_type IN ('cricket','killer','shanghai','halveit')
-            GROUP BY m.game_type
-            """,
-            (player_id, player_id),
-        ).fetchall()
-        party = {r["game_type"]: dict(r) for r in party_rows}
-        practice_rows = conn.execute(
-            "SELECT mode,score,details_json,played_at FROM practice_results WHERE player_id=? ORDER BY played_at DESC",
-            (player_id,),
-        ).fetchall()
-        practice_summary: dict[str, Any] = {
-            "checkout": {"sessions":0,"hits":0,"attempts":0,"rate":0},
-            "121": {"sessions":0,"best_target":0,"successes":0,"attempts":0,"rate":0},
-            "bobs27": {"sessions":0,"best_score":0,"best_doubles":[],"weak_doubles":[]},
-            "doubles": {"sessions":0,"hits":0,"darts":0,"rate":0,"best_doubles":[],"weak_doubles":[],"by_double":[]},
-        }
-        bob_double_hits = {str(i): [0,0] for i in list(range(1,21))+[25]}
-        trainer_double_hits = {str(i): [0,0] for i in list(range(1,21))+[25]}
-        for r in practice_rows:
-            mode=r["mode"]; detail=_json_obj(r["details_json"])
-            if mode=='checkout':
-                z=practice_summary['checkout']; z['sessions']+=1; z['hits']+=int(detail.get('hits',0)); z['attempts']+=int(detail.get('attempts',0))
-            elif mode=='121':
-                z=practice_summary['121']; z['sessions']+=1; z['best_target']=max(z['best_target'],int(round(r['score'] or 0))); z['successes']+=int(detail.get('hits',0)); z['attempts']+=int(detail.get('attempts',0))
-            elif mode=='bobs27':
-                z=practice_summary['bobs27']; z['sessions']+=1; z['best_score']=max(z['best_score'],int(round(r['score'] or 0)))
-                target_darts=detail.get('target_darts') or {}
-                for key,val in (detail.get('target_hits') or {}).items():
-                    if str(key) in bob_double_hits:
-                        bob_double_hits[str(key)][0]+=int(val); bob_double_hits[str(key)][1]+=int(target_darts.get(str(key),3))
-            elif mode=='doubles':
-                z=practice_summary['doubles']; z['sessions']+=1; z['hits']+=int(detail.get('hits',0)); z['darts']+=int(detail.get('darts',0))
-                target_darts=detail.get('target_darts') or {}
-                for key,val in (detail.get('target_hits') or {}).items():
-                    if str(key) in trainer_double_hits:
-                        trainer_double_hits[str(key)][0]+=int(val); trainer_double_hits[str(key)][1]+=int(target_darts.get(str(key),3))
-        for key in ('checkout','121'):
-            z=practice_summary[key]; z['rate']=round(z['hits' if key=='checkout' else 'successes']*100/z['attempts'],1) if z['attempts'] else 0
-        practice_summary['doubles']['rate']=round(practice_summary['doubles']['hits']*100/practice_summary['doubles']['darts'],1) if practice_summary['doubles']['darts'] else 0
-        bob_doubles=[]
-        for key,(hits,darts) in bob_double_hits.items():
-            if darts:
-                label='Bull' if key=='25' else f'D{key}'
-                bob_doubles.append({"target":label,"hits":hits,"darts":darts,"rate":round(hits*100/darts,1)})
-        practice_summary['bobs27']['best_doubles']=sorted(bob_doubles,key=lambda x:(-x['rate'],-x['hits'],x['target']))[:5]
-        practice_summary['bobs27']['weak_doubles']=sorted(bob_doubles,key=lambda x:(x['rate'],x['hits'],x['target']))[:5]
-        trainer_doubles=[]
-        for key,(hits,darts) in trainer_double_hits.items():
-            if darts:
-                label='Bull' if key=='25' else f'D{key}'
-                trainer_doubles.append({"target":label,"hits":hits,"darts":darts,"rate":round(hits*100/darts,1)})
-        practice_summary['doubles']['by_double']=sorted(trainer_doubles,key=lambda x:(25 if x['target']=='Bull' else int(x['target'][1:])))
-        practice_summary['doubles']['best_doubles']=sorted(trainer_doubles,key=lambda x:(-x['rate'],-x['hits'],x['target']))[:5]
-        practice_summary['doubles']['weak_doubles']=sorted(trainer_doubles,key=lambda x:(x['rate'],x['hits'],x['target']))[:5]
-        recent_matches = conn.execute(
-            """
-            SELECT m.id,m.game_type,m.start_score,m.winner_player_id,m.played_at,mp.three_dart_average,mp.highest_checkout,mp.scores_180,mp.legs_won,
-                   wp.name AS winner_name
-            FROM match_players mp JOIN matches m ON m.id=mp.match_id
-            LEFT JOIN players wp ON wp.id=m.winner_player_id
-            WHERE mp.player_id=? ORDER BY m.played_at DESC LIMIT 10
-            """,
-            (player_id,),
-        ).fetchall()
-        recent_practice = [{"mode":r["mode"],"score":r["score"],"played_at":r["played_at"],"details":_json_obj(r["details_json"])} for r in practice_rows[:10]]
-    return {"player":dict(player),"x01":x01,"party":party,"training":practice_summary,"recent_matches":[dict(r) for r in recent_matches],"recent_practice":recent_practice}
-
-
-@app.get("/api/head-to-head")
-def head_to_head(player1: int, player2: int) -> dict[str, Any]:
-    if player1 == player2:
-        raise HTTPException(400, "Choose two different players")
-    with db() as conn:
-        names = conn.execute("SELECT id,name FROM players WHERE id IN (?,?)", (player1,player2)).fetchall()
-        if len(names) != 2:
-            raise HTTPException(404, "Player not found")
-        name_map={r['id']:r['name'] for r in names}
-        match_ids = conn.execute(
-            """
-            SELECT m.id
-            FROM matches m JOIN match_players mp ON mp.match_id=m.id
-            WHERE m.game_type='x01'
-            GROUP BY m.id
-            HAVING COUNT(*)=2 AND SUM(CASE WHEN mp.player_id IN (?,?) THEN 1 ELSE 0 END)=2
-            ORDER BY m.played_at DESC
-            """, (player1,player2)
-        ).fetchall()
-        ids=[r['id'] for r in match_ids]
-        summaries={player1:{"player_id":player1,"name":name_map[player1],"wins":0,"legs":0,"darts":0,"points":0,"average":0,"best_average":0,"highest_checkout":0,"180s":0},player2:{"player_id":player2,"name":name_map[player2],"wins":0,"legs":0,"darts":0,"points":0,"average":0,"best_average":0,"highest_checkout":0,"180s":0}}
-        recent=[]
-        if ids:
-            placeholders=','.join('?'*len(ids))
-            rows=conn.execute(f"""
-                SELECT m.id,m.winner_player_id,m.played_at,m.start_score,mp.player_id,mp.legs_won,mp.darts_thrown,mp.points_scored,mp.three_dart_average,mp.highest_checkout,mp.scores_180
-                FROM matches m JOIN match_players mp ON mp.match_id=m.id
-                WHERE m.id IN ({placeholders}) ORDER BY m.played_at DESC,m.id DESC
-            """, ids).fetchall()
-            by_match={}
-            for r in rows:
-                s=summaries[r['player_id']]; s['legs']+=r['legs_won'] or 0; s['darts']+=r['darts_thrown'] or 0; s['points']+=r['points_scored'] or 0; s['best_average']=max(s['best_average'],r['three_dart_average'] or 0); s['highest_checkout']=max(s['highest_checkout'],r['highest_checkout'] or 0); s['180s']+=r['scores_180'] or 0
-                if r['winner_player_id']==r['player_id']: s['wins']+=1
-                by_match.setdefault(r['id'],{"id":r['id'],"played_at":r['played_at'],"start_score":r['start_score'],"winner_player_id":r['winner_player_id'],"players":[]})['players'].append({"player_id":r['player_id'],"name":name_map[r['player_id']],"legs":r['legs_won'] or 0,"average":round(r['three_dart_average'] or 0,1),"highest_checkout":r['highest_checkout'] or 0,"180s":r['scores_180'] or 0})
-            recent=list(by_match.values())[:8]
-            for s in summaries.values(): s['average']=round(s['points']*3/s['darts'],2) if s['darts'] else 0; s['best_average']=round(s['best_average'],2)
-        streak={"player_id":None,"name":None,"count":0}
-        if recent and recent[0]['winner_player_id'] in summaries:
-            wid=recent[0]['winner_player_id']; count=0
-            for m in recent:
-                if m['winner_player_id']==wid: count+=1
-                else: break
-            streak={"player_id":wid,"name":name_map[wid],"count":count}
-    return {"matches":len(ids),"players":[summaries[player1],summaries[player2]],"streak":streak,"recent":recent}
-
-
-@app.get("/api/training-analytics/{player_id}")
-def training_analytics(player_id: int) -> dict[str, Any]:
-    profile=player_profile(player_id)
-    return profile["training"]
-
-
-@app.get("/api/leaderboards")
-def leaderboards() -> dict[str, Any]:
-    with db() as conn:
-        bobs = conn.execute(
-            """
-            SELECT p.id AS player_id, p.name, MAX(pr.score) AS value
-            FROM practice_results pr
-            JOIN players p ON p.id=pr.player_id
-            WHERE pr.mode='bobs27'
-            GROUP BY p.id,p.name
-            ORDER BY value DESC, p.name COLLATE NOCASE
-            LIMIT 100
-            """
-        ).fetchall()
-        return {
-            "shanghai": _score_leaderboard(conn, "shanghai"),
-            "halveit": _score_leaderboard(conn, "halveit"),
-            "bobs27": [dict(r) for r in bobs],
-            "cricket_wins": _wins_leaderboard(conn, "cricket"),
-            "killer_wins": _wins_leaderboard(conn, "killer"),
-        }
-
-
-@app.get("/")
-def index() -> FileResponse:
-    return FileResponse(
-        STATIC_DIR / "index.html",
-        headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
-    )
+@app.get("/api/migration/database")
+def download_legacy_database():
+    if not LEGACY_DB.exists():
+        raise HTTPException(404, "No legacy DartDeck database found")
+    return FileResponse(LEGACY_DB, media_type="application/x-sqlite3", filename="dartdeck-legacy.sqlite3")
 
 
 @app.get("/manifest.webmanifest")
-def manifest() -> JSONResponse:
-    settings = load_settings()
-    payload = {
-        "id": "/",
-        "name": "DartDeck",
-        "short_name": "DartDeck",
-        "start_url": "/",
-        "scope": "/",
-        "display": "standalone",
-        "display_override": ["window-controls-overlay", "standalone", "minimal-ui"],
-        "background_color": settings["background_color"],
-        "theme_color": settings["primary_color"],
-        "description": "Self-hosted darts scoring and practice app",
-        "orientation": "any",
-        "icons": [
-            {"src": "/branding/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable"},
-            {"src": "/branding/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable"},
-        ],
-        "shortcuts": [
-            {"name": "New X01 game", "short_name": "X01", "url": "/?go=x01-setup", "icons": [{"src": "/branding/icon-192.png", "sizes": "192x192"}]},
-            {"name": "Training Centre", "short_name": "Training", "url": "/?go=practice-menu", "icons": [{"src": "/branding/icon-192.png", "sizes": "192x192"}]},
-        ],
-    }
-    return JSONResponse(payload, headers={"Cache-Control": "no-cache"})
-
-
-@app.get("/branding/icon-{size}.png")
-def branding_icon(size: int) -> FileResponse:
-    if size not in {64, 180, 192, 512}:
-        raise HTTPException(404, "Icon not found")
-    return FileResponse(icon_path(size), media_type="image/png", headers={"Cache-Control": "no-cache"})
-
-
-@app.get("/favicon.ico")
-def favicon() -> FileResponse:
-    return FileResponse(icon_path(64), media_type="image/png", headers={"Cache-Control": "no-cache"})
+def manifest():
+    return FileResponse(STATIC_DIR / "manifest.webmanifest", media_type="application/manifest+json")
 
 
 @app.get("/service-worker.js")
-def service_worker() -> FileResponse:
-    return FileResponse(
-        STATIC_DIR / "service-worker.js",
-        media_type="application/javascript",
-        headers={"Cache-Control": "no-cache, no-store, must-revalidate", "Service-Worker-Allowed": "/"},
-    )
+def service_worker():
+    return FileResponse(STATIC_DIR / "service-worker.js", media_type="application/javascript", headers={"Cache-Control": "no-cache"})
+
+
+@app.get("/")
+def index():
+    return FileResponse(STATIC_DIR / "index.html", headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
+
+
+@app.exception_handler(404)
+async def spa_fallback(request, exc):
+    # Keep API 404s as JSON; browser navigation falls back to the app shell.
+    if request.url.path.startswith("/api/"):
+        return JSONResponse(status_code=404, content={"detail": getattr(exc, "detail", "Not found")})
+    return FileResponse(STATIC_DIR / "index.html", headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
