@@ -17,7 +17,7 @@ let deferredInstallPrompt = null;
 let wakeLock = null;
 let gameplayActive = false;
 let serviceWorkerReady = false;
-const APP_VERSION = '0.8.0 · Local-first Docker';
+const APP_VERSION = '0.8.1 · Local-first Docker';
 const IS_NATIVE_MOBILE = false;
 const USE_LOCAL_STORE = !!window.DartDeckLocalStore;
 const MOBILE_UX = IS_NATIVE_MOBILE || USE_LOCAL_STORE;
@@ -369,8 +369,6 @@ async function mobileSettingsView(){
   const themeId=appSettings.theme_id||'midnight';
   const localSummary=USE_LOCAL_STORE?await window.DartDeckLocalStore.summary():null;
   const storagePersistent=USE_LOCAL_STORE&&navigator.storage?.persisted?await navigator.storage.persisted().catch(()=>false):false;
-  let legacy={available:false};
-  if(USE_LOCAL_STORE){try{const r=await fetch('/api/migration/status',{cache:'no-store'});if(r.ok)legacy=await r.json();}catch(e){}}
   const installText=standalone?'Installed':deferredInstallPrompt?'Install DartDeck':secure?'Install prompt not currently offered':'HTTPS required for installation';
   view.innerHTML=`
     <div class="section-title"><h2>Settings</h2><span class="muted">Appearance, gameplay & local data</span></div>
@@ -393,7 +391,7 @@ async function mobileSettingsView(){
       </div>
       ${USE_LOCAL_STORE?`<div class="card data-card">
         <h3>Data & backup</h3>
-        <p class="muted">This device owns its DartDeck history. The Docker server only serves the app and, during migration, exposes your old database read-only.</p>
+        <p class="muted">This device owns its DartDeck history. The Docker server only serves the app; players, matches, stats and Training Centre results stay in this browser/device.</p>
         <div class="data-summary">
           <div><strong>${localSummary.players}</strong><span>Players</span></div><div><strong>${localSummary.matches}</strong><span>Matches</span></div><div><strong>${localSummary.practice}</strong><span>Training</span></div><div><strong>${localSummary.total_180s}</strong><span>180s</span></div>
         </div>
@@ -401,10 +399,7 @@ async function mobileSettingsView(){
         <div class="actions data-actions"><button class="btn" id="mergeBackup" disabled>Import & merge</button><button class="btn danger" id="replaceBackup" disabled>Import & replace</button></div>
         <p class="muted small-note">Merge keeps existing history and skips records already imported. Replace clears this device first.</p>
       </div>
-      <div class="card migration-card">
-        <h3>Existing server history</h3>
-        ${legacy.available?`<p>Your old shared database is still available as a <strong>read-only migration source</strong>.</p><div class="data-summary"><div><strong>${legacy.players}</strong><span>Players</span></div><div><strong>${legacy.matches}</strong><span>Matches</span></div><div><strong>${legacy.practice}</strong><span>Training</span></div><div><strong>${legacy.total_180s}</strong><span>180s</span></div></div><div class="actions"><button class="btn primary big" id="migrateLegacy">Copy server history to this device</button><a class="btn" href="/api/migration/database" download>Download original DB</a></div><p class="muted small-note">Safe to run again: previously copied matches and training sessions are skipped. The server database is never modified.</p>`:`<p class="muted">No compatible legacy server database was detected. New games are already being saved locally on this device.</p>`}
-      </div>`:''}
+`:''}
       <div class="card">
         <h3>${USE_LOCAL_STORE?'Docker / PWA edition':'Mobile edition'}</h3>
         ${statusRow(true,`DartDeck ${APP_VERSION}`)}
@@ -431,7 +426,6 @@ async function mobileSettingsView(){
     $('#backupFile').onchange=()=>{const ready=!!$('#backupFile').files[0];$('#mergeBackup').disabled=!ready;$('#replaceBackup').disabled=!ready;};
     $('#mergeBackup').onclick=()=>importLocalBackup('merge');
     $('#replaceBackup').onclick=()=>importLocalBackup('replace');
-    $('#migrateLegacy')?.addEventListener('click',migrateLegacyServer);
     $('#installFromSettings')?.addEventListener('click',installPwa);
     $('#protectStorage')?.addEventListener('click',async()=>{if(!navigator.storage?.persist){toast('Persistent storage is not supported by this browser',3200);return;}const ok=await navigator.storage.persist().catch(()=>false);toast(ok?'Persistent storage granted':'Browser did not grant persistent storage',3200);await mobileSettingsView();});
   }
@@ -448,15 +442,6 @@ async function importLocalBackup(mode){
   if(mode==='replace'&&!confirm('Replace all DartDeck data on this device with this backup? This cannot be undone unless you export a backup first.'))return;
   try{const payload=JSON.parse(await file.text());const result=await window.DartDeckLocalStore.importData(payload,mode);await loadPlayers();toast(`${mode==='merge'?'Merged':'Restored'} · ${result.summary.matches} matches · ${result.summary.practice} training sessions`,3500);await mobileSettingsView();}catch(e){toast(e.message||'Could not import backup',4000);}
 }
-async function migrateLegacyServer(){
-  if(!confirm('Copy the existing server history to this device? The old server database will remain unchanged.'))return;
-  try{
-    const r=await fetch('/api/migration/export',{cache:'no-store'});if(!r.ok){const e=await r.json().catch(()=>({detail:'Migration export failed'}));throw new Error(e.detail||'Migration export failed');}
-    const payload=await r.json();const result=await window.DartDeckLocalStore.importData(payload,'merge');await loadPlayers();
-    toast(`Migration complete · ${result.players_added} players · ${result.matches_added} matches · ${result.practice_added} training sessions copied`,4500);await mobileSettingsView();
-  }catch(e){toast(e.message||'Migration failed',4500);}
-}
-
 function colourField(label,id,value){return `<label>${label}<span class="colour-field"><input type="color" id="${id}" value="${value}"><input value="${value}" aria-label="${label} hex colour" data-sync="${id}" maxlength="7"></span></label>`}
 function statusRow(ok,text){return `<div class="status-row"><span class="status-dot ${ok?'ok':'bad'}"></span><span>${text}</span></div>`}
 async function saveSettingsFromForm(){

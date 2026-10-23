@@ -1,47 +1,35 @@
-# DartDeck v0.8.0 — Local-First Docker/PWA
+# DartDeck v0.8.1 — Clean Local-First Docker/PWA
 
-DartDeck v0.8.0 changes the Docker/PWA edition from shared server-side game storage to local device storage.
+DartDeck v0.8.1 is the clean public/local-first build. The one-time legacy server migration tools from v0.8.0 have been removed.
 
-## What this means
+## Storage model
 
-- Players, matches, head-to-head history, leaderboards and Training Centre data are stored in IndexedDB in the browser/PWA on the device being used.
-- New game data is **not written to the Docker SQLite database**.
-- The existing `/data/dartdeck.db` is retained only as a read-only migration source.
-- The app matches the current Android mobile UX: curated themes, accent colour, Dartboard View during games, DartBot pause/reveal, player profiles, head-to-head stats and the Training Centre including Doubles Trainer.
-- Full backup export plus Merge / Replace import is built in.
+- Players, matches, head-to-head history, leaderboards and Training Centre data are stored locally in IndexedDB in each browser/PWA.
+- The Docker container serves the application only. It does not store DartDeck player or match history.
+- Every device/browser gets its own private DartDeck database.
+- Full backup export plus Import & Merge / Import & Replace remain available under Settings → Data & backup.
 
-## Upgrade from v0.7.2
+## Upgrading from v0.8.0
 
-Keep the existing `dartdeck_data` Docker volume when you redeploy. It contains the history that DartDeck needs to copy to the workshop tablet.
+If you already copied the old server history into the workshop tablet, redeploying v0.8.1 at the **same URL/domain/port** preserves that local browser database. The migration controls simply disappear.
 
-1. Deploy/rebuild v0.8.0 using the same stack and existing volume.
-2. Open DartDeck on the **workshop tablet/browser that will own the data**.
-3. Go to **Settings → Existing server history**.
-4. Check the displayed legacy counts (players, matches, training sessions and 180s).
-5. Press **Copy server history to this device**.
-6. Open Players / Stats / Head-to-Head and confirm the history looks correct.
-7. Return to **Settings → Data & backup** and press **Export backup**.
-8. Keep that backup somewhere safe before clearing browser data, reinstalling the PWA or changing the DartDeck URL.
+Before upgrading, an Export Backup is strongly recommended.
 
-The migration is safe to run again. Legacy records have stable IDs and already imported matches/training sessions are skipped.
+Do not clear browser/site data, change the DartDeck hostname/domain/port, or uninstall the PWA unless you have a backup. Those actions can make the local database unavailable to the new origin/profile.
 
-## Important local-storage behaviour
+The old Docker named volume is no longer mounted or required by this compose file. Removing the mount does not itself erase the browser data already stored on the tablet.
 
-Local data belongs to the browser origin and browser profile. In practice:
+## Sharing DartDeck
 
-- the same workshop tablet + same browser/PWA + same DartDeck URL sees the same data;
-- another phone or PC starts with its own database;
-- changing the hostname/domain/port may create a different browser origin and therefore a different local database;
-- clearing site data can remove DartDeck history;
-- removing/reinstalling a PWA can behave differently by browser, so do not rely on uninstall preserving data.
+Friends opening your DartDeck URL start with a clean local database on their own device. They cannot access or migrate the old workshop server history. Their players, games and statistics remain local to their browser/device.
 
-Use **Export backup** regularly. Settings also includes a **Protect local data** control where the browser supports persistent storage.
+## Backup
 
-## Backup import
+Settings → Data & backup provides:
 
-**Import & merge** is the normal choice. It keeps the device's existing players/history and skips records already present.
-
-**Import & replace** clears the local DartDeck database first, then restores the selected backup. Export a backup before using Replace.
+- **Export backup** — saves a portable DartDeck JSON backup.
+- **Import & merge** — adds records from a backup while keeping existing local history.
+- **Import & replace** — replaces the local device database with the selected backup.
 
 ## Docker deployment
 
@@ -52,18 +40,7 @@ services:
     container_name: dartdeck
     ports:
       - "8788:8000"
-    volumes:
-      - dartdeck_data:/data
-    environment:
-      - DARTDECK_LEGACY_DB=/data/dartdeck.db
     restart: unless-stopped
-
-volumes:
-  dartdeck_data:
 ```
 
-The volume is still present in v0.8.0 solely so the old database can be migrated/downloaded. New scores do not use it.
-
-## Future cleanup
-
-Once you have migrated the workshop tablet, verified the stats/head-to-head history, and exported a local backup, a future release can remove the legacy database dependency entirely and serve DartDeck as a lightweight static application.
+No DartDeck data volume is required in v0.8.1.
