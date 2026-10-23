@@ -1,6 +1,6 @@
-# DartDeck v0.8.1 — Clean Local-First Docker/PWA
+# DartDeck v0.8.2 — Clean Local-First Docker/PWA
 
-DartDeck v0.8.1 is the clean public/local-first build. The one-time legacy server migration tools from v0.8.0 have been removed.
+DartDeck v0.8.2 is the clean public/local-first build. It adds a device-specific Last Backup indicator to the existing v0.8.1 local-first design.
 
 ## Storage model
 
@@ -9,9 +9,13 @@ DartDeck v0.8.1 is the clean public/local-first build. The one-time legacy serve
 - Every device/browser gets its own private DartDeck database.
 - Full backup export plus Import & Merge / Import & Replace remain available under Settings → Data & backup.
 
-## Upgrading from v0.8.0
+## Last Backup indicator
 
-If you already copied the old server history into the workshop tablet, redeploying v0.8.1 at the **same URL/domain/port** preserves that local browser database. The migration controls simply disappear.
+Settings → Data & backup now shows the last date/time this device exported a DartDeck backup. The timestamp is stored locally on that device and is deliberately not imported from backup files. If no backup has been exported, DartDeck displays a backup recommendation.
+
+## Upgrading from v0.8.0 / v0.8.1
+
+If you already copied the old server history into the workshop tablet, redeploying v0.8.2 at the **same URL/domain/port** preserves that local browser database. The migration controls simply disappear.
 
 Before upgrading, an Export Backup is strongly recommended.
 
@@ -43,4 +47,4 @@ services:
     restart: unless-stopped
 ```
 
-No DartDeck data volume is required in v0.8.1.
+No DartDeck data volume is required in v0.8.2.

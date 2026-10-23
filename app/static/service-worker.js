@@ -1,5 +1,5 @@
-const CACHE='dartdeck-v081';
-const CORE=['/','/static/app.js?v=0.8.1','/static/local-store.js?v=0.8.1','/static/styles.css?v=0.8.1','/static/icons/icon-192.png','/static/icons/icon-512.png'];
+const CACHE='dartdeck-v082';
+const CORE=['/','/static/app.js?v=0.8.2','/static/local-store.js?v=0.8.2','/static/styles.css?v=0.8.2','/static/icons/icon-192.png','/static/icons/icon-512.png'];
 self.addEventListener('install',event=>{self.skipWaiting();event.waitUntil(caches.open(CACHE).then(cache=>cache.addAll(CORE)));});
 self.addEventListener('activate',event=>{event.waitUntil(Promise.all([caches.keys().then(keys=>Promise.all(keys.filter(k=>k!==CACHE).map(k=>caches.delete(k)))),self.clients.claim()]));});
 self.addEventListener('fetch',event=>{

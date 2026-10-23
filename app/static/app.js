@@ -17,10 +17,29 @@ let deferredInstallPrompt = null;
 let wakeLock = null;
 let gameplayActive = false;
 let serviceWorkerReady = false;
-const APP_VERSION = '0.8.1 · Local-first Docker';
+const APP_VERSION = '0.8.2 · Local-first Docker';
 const IS_NATIVE_MOBILE = false;
 const USE_LOCAL_STORE = !!window.DartDeckLocalStore;
 const MOBILE_UX = IS_NATIVE_MOBILE || USE_LOCAL_STORE;
+const LAST_BACKUP_KEY = 'dartdeck:last-backup-at';
+function getLastBackupAt(){
+  try{return localStorage.getItem(LAST_BACKUP_KEY)||'';}catch(e){return '';}
+}
+function formatBackupTime(iso){
+  if(!iso)return '';
+  const d=new Date(iso);if(Number.isNaN(d.getTime()))return '';
+  try{return d.toLocaleString([], {dateStyle:'medium',timeStyle:'short'});}catch(e){return d.toLocaleString();}
+}
+function backupIndicatorHtml(iso){
+  const label=formatBackupTime(iso);
+  return `<div class="backup-indicator ${label?'ok':'warn'}" id="lastBackupIndicator"><span class="backup-indicator-icon">${label?'✓':'!'}</span><div><strong>${label?`Last backup: ${esc(label)}`:'No backup recorded on this device'}</strong><span>${label?'Your latest exported DartDeck backup was created at this time.':'Export a backup so your local DartDeck history can be restored if site data is cleared.'}</span></div></div>`;
+}
+function setLastBackupNow(){
+  const iso=new Date().toISOString();
+  try{localStorage.setItem(LAST_BACKUP_KEY,iso);}catch(e){}
+  const node=document.getElementById('lastBackupIndicator');if(node)node.outerHTML=backupIndicatorHtml(iso);
+  return iso;
+}
 const THEME_PRESETS = {
   midnight:{label:'Midnight',bg:'#0d0f10',panel:'#171a1c',text:'#f4f6f1',muted:'#aeb5ad',dark:true},
   carbon:{label:'Carbon',bg:'#111214',panel:'#202226',text:'#f5f5f2',muted:'#aaaeb3',dark:true},
@@ -368,6 +387,7 @@ async function mobileSettingsView(){
   const wake=('wakeLock' in navigator),secure=window.isSecureContext,standalone=isStandalone();
   const themeId=appSettings.theme_id||'midnight';
   const localSummary=USE_LOCAL_STORE?await window.DartDeckLocalStore.summary():null;
+  const lastBackupAt=USE_LOCAL_STORE?getLastBackupAt():'';
   const storagePersistent=USE_LOCAL_STORE&&navigator.storage?.persisted?await navigator.storage.persisted().catch(()=>false):false;
   const installText=standalone?'Installed':deferredInstallPrompt?'Install DartDeck':secure?'Install prompt not currently offered':'HTTPS required for installation';
   view.innerHTML=`
@@ -392,6 +412,7 @@ async function mobileSettingsView(){
       ${USE_LOCAL_STORE?`<div class="card data-card">
         <h3>Data & backup</h3>
         <p class="muted">This device owns its DartDeck history. The Docker server only serves the app; players, matches, stats and Training Centre results stay in this browser/device.</p>
+        ${backupIndicatorHtml(lastBackupAt)}
         <div class="data-summary">
           <div><strong>${localSummary.players}</strong><span>Players</span></div><div><strong>${localSummary.matches}</strong><span>Matches</span></div><div><strong>${localSummary.practice}</strong><span>Training</span></div><div><strong>${localSummary.total_180s}</strong><span>180s</span></div>
         </div>
@@ -435,7 +456,7 @@ async function exportLocalBackup(){
   const payload=await window.DartDeckLocalStore.exportData();
   const stamp=new Date().toISOString().slice(0,10);
   const blob=new Blob([JSON.stringify(payload,null,2)],{type:'application/json'});
-  const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=`dartdeck-backup-${stamp}.json`;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);toast('Backup exported');
+  const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=`dartdeck-backup-${stamp}.json`;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);setLastBackupNow();toast('Backup exported · Last Backup updated');
 }
 async function importLocalBackup(mode){
   const file=$('#backupFile')?.files?.[0];if(!file){toast('Choose a DartDeck backup first');return;}

@@ -7,13 +7,13 @@ from fastapi.staticfiles import StaticFiles
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
 
-app = FastAPI(title="DartDeck Local", version="0.8.1")
+app = FastAPI(title="DartDeck Local", version="0.8.2")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
 @app.get("/api/health")
 def health() -> dict[str, str]:
-    return {"status": "ok", "storage": "local-device", "version": "0.8.1"}
+    return {"status": "ok", "storage": "local-device", "version": "0.8.2"}
 
 
 @app.get("/manifest.webmanifest")
